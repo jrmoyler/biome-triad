@@ -1,0 +1,1267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>Helios Triad — Interactive Procedural World (WebGPU & GLSL 3.00)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #04070d; font-family: system-ui, -apple-system, sans-serif; color: #f1f5f9; user-select: none; }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+  #hud {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 10;
+    display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: center;
+    background: rgba(6, 10, 18, 0.55); backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 999px;
+    padding: 5px 10px; pointer-events: auto; transition: opacity 160ms ease, transform 160ms ease;
+    max-width: 96vw;
+  }
+  #hud.hidden { opacity: 0; pointer-events: none; transform: translate(-50%, 12px); }
+  #restore-btn {
+    position: fixed; bottom: 14px; right: 14px; z-index: 11;
+    display: none; background: rgba(6, 10, 18, 0.5); color: #cbd5e1;
+    border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 999px;
+    padding: 5px 10px; font-size: 11px; cursor: pointer; backdrop-filter: blur(6px);
+  }
+  button {
+    background: transparent; color: #cbd5e1;
+    border: 1px solid transparent; border-radius: 999px;
+    padding: 4px 9px; font-size: 11px; font-weight: 500; cursor: pointer;
+    transition: background 140ms ease, color 140ms ease; white-space: nowrap;
+  }
+  button:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+  button.active { background: #f59e0b; color: #090d16; font-weight: 600; }
+  .sep { width: 1px; height: 14px; background: rgba(255, 255, 255, 0.15); margin: 0 2px; }
+  .meta { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #94a3b8; font-variant-numeric: tabular-nums; padding: 0 5px; white-space: nowrap; }
+</style>
+</head>
+<body>
+<canvas id="viewport"></canvas>
+<div id="hud">
+  <button id="btn-1" class="active" onclick="setAngle(1)">1: Amazon</button>
+  <button id="btn-2" onclick="setAngle(2)">2: Sea</button>
+  <button id="btn-3" onclick="setAngle(3)">3: Egypt</button>
+  <button id="btn-0" onclick="setAngle(0)">4: Ecotone</button>
+  <div class="sep"></div>
+  <button id="w-clear" class="active" onclick="setWeather('clear')">Clear</button>
+  <button id="w-rain" onclick="setWeather('rain')">Rain</button>
+  <button id="w-fog" onclick="setWeather('fog')">Fog</button>
+  <div class="sep"></div>
+  <button id="t-dawn" onclick="setTod('dawn')">Dawn</button>
+  <button id="t-noon" onclick="setTod('noon')">Noon</button>
+  <button id="t-dusk" class="active" onclick="setTod('dusk')">Dusk</button>
+  <button id="t-night" onclick="setTod('night')">Night</button>
+  <div class="sep"></div>
+  <span class="meta" id="telemetry">60 FPS</span>
+  <button onclick="toggleHud()" title="Press H to toggle HUD">Hide [H]</button>
+</div>
+<button id="restore-btn" onclick="toggleHud()">Show HUD [H]</button>
+<script id="vs-glsl300" type="x-shader/x-vertex">#version 300 es
+precision highp float;
+layout(location = 0) in vec2 aPosition;
+out vec2 vUv;
+void main() {
+  vUv = aPosition * 0.5 + 0.5;
+  gl_Position = vec4(aPosition, 0.0, 1.0);
+}</script>
+<script id="fs-glsl300" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform vec2 uResolution;
+uniform float uTime;
+uniform vec3 uCamPos;
+uniform vec2 uCamRot;        // x: yaw, y: pitch
+uniform vec2 uSunDir;        // x: azimuth (rad), y: elevation (rad)
+uniform float uFogDensity;   // atmospheric turbidity
+uniform vec2 uWeather;       // x: rainIntensity (0..1), y: fogWeatherBoost (0..1)
+uniform int uBiomeLock;      // 0: seamless tri-biome world, 1: amazon, 2: sea, 3: egypt
+uniform int uQuality;        // 0: fast, 1: balanced, 2: ultra
+
+// ============================================================================
+// BAND-LIMITED PROCEDURAL NOISE & HASH PRIMITIVES (ZERO SHIMMER / ZERO Z-FIGHT)
+// ============================================================================
+float hash12(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+vec2 hash22(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.xx + p3.yz) * p3.zy);
+}
+
+float noise2D(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0); // Quintic C2 interpolation prevents normal creases!
+  float a = hash12(i);
+  float b = hash12(i + vec2(1.0, 0.0));
+  float c = hash12(i + vec2(0.0, 1.0));
+  float d = hash12(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+const mat2 m2 = mat2(0.80, -0.60, 0.60, 0.80);
+
+float fbm4(vec2 p) {
+  float f = 0.0;
+  float w = 0.5;
+  for (int i = 0; i < 4; i++) {
+    f += w * noise2D(p);
+    p = m2 * p * 2.02;
+    w *= 0.5;
+  }
+  return f;
+}
+
+float fbm5(vec2 p) {
+  float f = 0.0;
+  float w = 0.5;
+  for (int i = 0; i < 5; i++) {
+    f += w * noise2D(p);
+    p = m2 * p * 2.03;
+    w *= 0.5;
+  }
+  return f;
+}
+
+// ============================================================================
+// C2-CONTINUOUS BIOME ECOTONE WEIGHTS
+// ============================================================================
+vec3 getBiomeWeights(vec2 xz) {
+  if (uBiomeLock == 1) return vec3(1.0, 0.0, 0.0);
+  if (uBiomeLock == 2) return vec3(0.0, 1.0, 0.0);
+  if (uBiomeLock == 3) return vec3(0.0, 0.0, 1.0);
+
+  vec2 macroWarp = vec2(
+    fbm4(xz * 0.0032 + vec2(1.7, 4.2)) - 0.5,
+    fbm4(xz * 0.0032 + vec2(8.3, 2.9)) - 0.5
+  ) * 68.0;
+  vec2 wPos = xz + macroWarp;
+
+  float wAmazon = smoothstep(20.0, -95.0, wPos.x) * smoothstep(-135.0, -40.0, wPos.y);
+  float wEgypt  = smoothstep(-20.0, 95.0, wPos.x) * smoothstep(-135.0, -40.0, wPos.y);
+  float centralBay = 1.0 - clamp(wAmazon + wEgypt, 0.0, 1.0);
+  float southBasin = smoothstep(-25.0, -105.0, wPos.y);
+  float wSea = clamp(centralBay + southBasin * 0.9, 0.0, 1.0);
+
+  vec3 raw = max(vec3(wAmazon, wSea, wEgypt), vec3(0.0001));
+  return raw / (raw.x + raw.y + raw.z);
+}
+
+// ============================================================================
+// BIOME 1: AMAZONIAN RAINFOREST, EMERGENT KAPOK GIANTS & PALM ROSETTES
+// ============================================================================
+// Closes visual gap to reference photo 1:
+// - Central meandering blackwater river reflecting golden sky
+// - Prominent foreground left & right Emergent Kapok trees with exposed silver-grey
+//   buttress trunks, spreading limbs, hanging lianas, and broad umbrella crowns
+// - Distinct tropical palm rosettes & multi-tier emerald-to-chartreuse canopy
+vec4 evalAmazonSolid(vec2 xz, float seaWeight, bool highDetail) {
+  float zScaled = xz.y * 0.024;
+  float riverOffset = (uBiomeLock == 1) ? -156.0 : -156.0;
+  // Meandering river curve framed right down the center of Angle 1
+  float riverCenter = riverOffset + sin(zScaled + 0.5) * 18.0 + cos(zScaled * 0.55 - 0.4) * 12.0;
+  float distToRiver = xz.x - riverCenter;
+  float absRiver = abs(distToRiver);
+  float riverWidth = 10.5 + 2.8 * sin(zScaled * 1.9 + 0.8);
+
+  // Smooth alluvial riverbed (-2.4m deep) rising onto lush banks
+  float bankRise = smoothstep(riverWidth * 0.65, riverWidth * 1.35, absRiver);
+  float coastalTaper = 1.0 - smoothstep(0.18, 0.78, seaWeight);
+  float hills = (fbm4(xz * 0.015) * 14.0 + noise2D(xz * 0.05) * 3.2) * coastalTaper;
+  float groundH = mix(-2.4, 0.8 + hills * smoothstep(riverWidth * 0.9, riverWidth * 2.4, absRiver), bankRise);
+
+  // Forest canopy mask starts right at the water's edge to create overhanging bank foliage
+  float forestMask = smoothstep(riverWidth * 0.72, riverWidth * 1.18, absRiver) *
+                     smoothstep(0.72, 0.12, seaWeight);
+  if (forestMask < 0.005) {
+    return vec4(groundH, 1.0, 0.0, 0.0);
+  }
+
+  // 1. Hero Emergent Kapok Trees (specifically framing Left Foreground [-172, 2] & Right Midground [-136, 22] + procedural grid)
+  vec2 hero1 = xz - vec2(-171.5, 2.0);
+  vec2 hero2 = xz - vec2(-137.0, 24.0);
+  float dHero1 = length(hero1);
+  float dHero2 = length(hero2);
+
+  float kapokH = 0.0;
+  float isTrunkBark = 0.0;
+  float emergentFlag = 0.0;
+
+  // Foreground Left Giant Kapok with buttress roots, exposed trunk & spreading umbrella crown
+  if (dHero1 < 15.5) {
+    float ang1 = atan(hero1.y, hero1.x);
+    float buttress = 1.8 + 1.15 * pow(0.5 + 0.5 * cos(ang1 * 5.0 + 0.4), 2.0);
+    // Exposed silver-grey trunk column + spreading crown overhang
+    float crownDist = length((hero1 - vec2(1.2, 0.5)) * vec2(0.85, 1.05));
+    if (crownDist < 12.8) {
+      float dome = sqrt(max(0.0, 1.0 - (crownDist / 12.8) * (crownDist / 12.8)));
+      float subClusters = fbm4(xz * 0.38) * 3.8 + sin(ang1 * 7.0) * 0.9;
+      kapokH = 20.5 * dome + subClusters * smoothstep(0.05, 0.35, dome);
+      emergentFlag = 1.0;
+      // Reveal fluted silver-grey trunk & branches on the camera-facing side of the crown
+      if (dHero1 < buttress * 1.45 && hero1.y < 1.8) {
+        isTrunkBark = smoothstep(buttress * 1.45, buttress * 0.5, dHero1);
+      }
+    }
+  }
+
+  // Right Midground Giant Kapok
+  if (dHero2 < 14.5) {
+    float ang2 = atan(hero2.y, hero2.x);
+    float crownDist2 = length(hero2 * vec2(0.9, 1.0));
+    if (crownDist2 < 12.2) {
+      float dome2 = sqrt(max(0.0, 1.0 - (crownDist2 / 12.2) * (crownDist2 / 12.2)));
+      float subClusters2 = fbm4(xz * 0.42 + 3.1) * 3.5 + cos(ang2 * 6.0) * 0.8;
+      float h2 = 19.5 * dome2 + subClusters2 * smoothstep(0.05, 0.35, dome2);
+      if (h2 > kapokH) {
+        kapokH = h2;
+        emergentFlag = 1.0;
+        if (dHero2 < 2.6 && hero2.y < 1.2) {
+          isTrunkBark = smoothstep(2.6, 1.1, dHero2);
+        }
+      }
+    }
+  }
+
+  // 2. Infinite Procedural Voronoi Multi-Tier Canopy & Tropical Palm Rosettes
+  vec2 cUv = xz * 0.105;
+  vec2 cId = floor(cUv);
+  vec2 cFr = fract(cUv);
+  float minDist = 8.0;
+  vec2 bestPt = vec2(0.0);
+  vec2 cellRnd = vec2(0.0);
+
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      vec2 nb = vec2(float(i), float(j));
+      vec2 rnd = hash22(cId + nb);
+      vec2 pt = nb + 0.15 + 0.7 * rnd - cFr;
+      float d = length(pt);
+      if (d < minDist) {
+        minDist = d;
+        bestPt = pt;
+        cellRnd = rnd;
+      }
+    }
+  }
+
+  float isEmergentCell = step(0.82, cellRnd.x);
+  float isPalmCell = step(0.55, cellRnd.y) * (1.0 - isEmergentCell);
+  float crownRad = mix(0.64, 0.90, isEmergentCell);
+  float normD = clamp(minDist / crownRad, 0.0, 1.0);
+  float dome = sqrt(max(0.0, 1.0 - normD * normD));
+
+  float windBoost = 1.0 + uWeather.x * 1.6;
+  float procTreeH = dome * mix(6.8, 15.8, isEmergentCell) * (0.4 + 0.6 * coastalTaper);
+
+  if (highDetail) {
+    float ang = atan(bestPt.y, bestPt.x);
+    // Distinct radiating palm frond star rosettes (visible in reference foreground!)
+    float palmFronds = sin(ang * 15.0 + cellRnd.x * 6.28) * 1.15 * isPalmCell * smoothstep(0.05, 0.85, normD);
+    float billow = fbm4(xz * 0.48 + vec2(uTime * 0.14 * windBoost, 0.0)) * 3.1;
+    procTreeH += (billow + palmFronds) * smoothstep(0.02, 0.25, dome);
+  } else {
+    procTreeH += noise2D(xz * 0.42) * 2.2 * smoothstep(0.02, 0.25, dome);
+  }
+
+  float finalCrownH = max(kapokH, procTreeH) * forestMask;
+  float finalEmergent = max(emergentFlag, isEmergentCell * forestMask);
+  // Encode palm & trunk metadata in z/w
+  float metaZ = isTrunkBark > 0.05 ? (2.0 + isTrunkBark) : (forestMask * (0.25 + 0.75 * isPalmCell));
+  return vec4(groundH + finalCrownH, 1.0, metaZ, finalEmergent);
+}
+
+// ============================================================================
+// BIOME 2: ENDLESS LIVING SEA, CURLING TURQUOISE WAVE ROLLER & CORAL REEF
+// ============================================================================
+// Closes visual gap to reference photo 2:
+// - Prominent foreground/midground curling wave crest with luminous cyan-turquoise
+//   subsurface light transmission
+// - Clear shallow trough in foreground revealing textured underwater coral reef heads
+// - Billowy whitecap wave-crest foam & lacy cellular foam streaks
+vec4 evalSeaSurface(vec2 xz, float landWeight, bool highDetail) {
+  float stormAmp = 1.0 + uWeather.x * 0.42;
+  float t = uTime * (1.05 + uWeather.x * 0.30);
+
+  // Shoaling wave attenuation near beaches
+  float shoal = 1.0 - smoothstep(0.28, 0.88, landWeight);
+
+  // 1. Hero Breaking Wave Roller across the foreground/midground of Angle 2 (z around -115 to -138)
+  float wavePhaseZ = xz.y * 0.13 + sin(xz.x * 0.045) * 1.35 + t * 1.15;
+  // Asymmetric trochoidal wave profile (steep front face, long back slope)
+  float sWave = sin(wavePhaseZ - 0.55 * cos(wavePhaseZ));
+  float rollerCrest = pow(max(0.0, 0.5 + 0.5 * sWave), 3.2);
+  float rollerH = rollerCrest * 3.15 * stormAmp;
+
+  // 2. Multi-Octave Pelagic Swell & Cross-Chop
+  vec2 p = xz * 0.072;
+  vec2 d1 = normalize(vec2(0.25, 0.96));
+  vec2 d2 = normalize(vec2(-0.62, 0.78));
+  vec2 d3 = normalize(vec2(0.78, 0.62));
+
+  float w1 = sin(dot(p, d1) * 1.45 + t * 1.2);
+  float c1 = pow(0.5 + 0.5 * w1, 2.4);
+
+  float w2 = sin(dot(p, d2) * 2.35 - t * 1.45 + w1 * 0.4);
+  float c2 = pow(0.5 + 0.5 * w2, 2.2);
+
+  float w3 = sin(dot(p, d3) * 4.10 + t * 1.95 + w2 * 0.3);
+  float c3 = pow(0.5 + 0.5 * w3, 2.0);
+
+  float swellH = (c1 * 1.45 + c2 * 0.85 + c3 * 0.42) * stormAmp;
+  float totalWaveH = (rollerH * 0.75 + swellH * 0.65 - 1.15) * shoal;
+
+  // Crest thickness for luminous turquoise subsurface scattering
+  float crestThickness = clamp(rollerCrest * 0.85 + c1 * 0.45 + c2 * 0.25, 0.0, 1.0);
+
+  // Billowy crest-breaking foam + trailing cellular foam web
+  float breakerZone = smoothstep(0.58, 0.94, rollerCrest) +
+                      smoothstep(0.68, 0.96, c1 * 0.6 + c2 * 0.4) * 0.75;
+  // Flank spray shoulders like in reference photo 2
+  float flankSpray = smoothstep(0.35, 0.82, rollerCrest) *
+                     smoothstep(0.25, 0.75, abs(sin(xz.x * 0.14 + 0.8)));
+  float foamFactor = clamp(breakerZone + flankSpray * 0.65, 0.0, 1.0);
+
+  // Coastal surf-zone foam rings where sea washes onto rainforest or desert shore
+  float surfZone = smoothstep(0.14, 0.46, landWeight) * (1.0 - smoothstep(0.50, 0.86, landWeight));
+  foamFactor = clamp(foamFactor + surfZone * (0.5 + 0.5 * sin(length(xz) * 0.5 - t * 2.6)), 0.0, 1.0);
+
+  if (highDetail) {
+    float micro1 = noise2D(xz * 0.55 + vec2(t * 0.7, -t * 0.5));
+    float micro2 = noise2D(xz * 1.65 - vec2(t * 1.1, t * 0.8));
+    totalWaveH += (micro1 * 0.16 + micro2 * 0.06) * shoal * stormAmp;
+  }
+
+  return vec4(totalWaveH, 2.0, foamFactor, crestThickness);
+}
+
+// Coral reef seabed height beneath the living sea
+float evalCoralSeabed(vec2 xz) {
+  float coralHeads = fbm4(xz * 0.28) * 2.4 + sin(xz.x * 0.08) * cos(xz.y * 0.08) * 1.2;
+  return -3.2 + coralHeads;
+}
+
+// ============================================================================
+// BIOME 3: ANCIENT EGYPTIAN TEMPLE COMPLEX, GIZA PYRAMIDS, NILE & SAHARA
+// ============================================================================
+// Closes visual gap to reference photo 3:
+// - Diagonal sapphire-teal Nile river with sailing Felucca boats (hulls + white lateen sails)
+// - West Bank (left of Nile): Monumental Sandstone Temple Complex with Twin Sloped Pylons,
+//   cornice moldings, Twin Obelisks, long Hypostyle Colonnade, and courtyard walls
+// - Behind Temple on West Plateau: 3 Great Weathered Limestone Pyramids with stepped courses
+//   and smooth apex casing stones, backed by Saharan erg sand dunes
+// - East Bank (right of Nile): Lush green agricultural fields, Date Palm groves & Mud-Brick town
+vec4 evalEgyptSolid(vec2 xz, float seaWeight, bool highDetail) {
+  vec2 local = xz - vec2(195.0, 15.0);
+
+  // Diagonal Nile River corridor matching reference photo composition
+  float nileCenter = -14.0 + local.y * 0.32 + sin(local.y * 0.022) * 14.0;
+  float nileDist = local.x - nileCenter; // > 0: West Bank (Temple & Pyramids), < 0: East Bank (Palms & Village)
+  float absNile = abs(nileDist);
+  float nileWidth = 14.5 + 2.2 * sin(local.y * 0.035);
+
+  float coastalTaper = 1.0 - smoothstep(0.15, 0.75, seaWeight);
+  float bankRise = smoothstep(nileWidth * 0.68, nileWidth * 1.25, absNile);
+
+  // Saharan Erg Sand Dunes rising west of the temple complex
+  vec2 dUv = xz * 0.019;
+  float duneWarp = fbm4(dUv * 1.35) * 2.1;
+  float duneWave = abs(sin(dUv.x * 2.5 + dUv.y * 1.2 + duneWarp));
+  float sharpDune = pow(1.0 - duneWave, 1.9) * 14.5 * coastalTaper;
+  float secDune   = pow(1.0 - abs(sin(dUv.x * 4.8 - dUv.y * 2.2 + duneWarp * 0.7)), 1.6) * 5.0 * coastalTaper;
+
+  // Dunes rise smoothly behind the temple plateau (nileDist > 38)
+  float westDesertMask = smoothstep(28.0, 75.0, nileDist);
+  float groundH = mix(-2.2, (1.6 * coastalTaper) + (sharpDune + secDune) * westDesertMask, bankRise);
+
+  float matId = 3.0; // 3.0: Sand/Bank, 3.2: Limestone/Sandstone, 3.3: Apex Casing/Gold, 3.4: Date Palms/Crops, 3.5: Felucca Sail
+  float structH = groundH;
+  float torchGlow = 0.0;
+
+  // 1. Felucca Sailboats gliding along the Nile Channel
+  if (absNile < nileWidth * 0.78) {
+    float laneOffset = ( fract(floor((local.y + 120.0) / 26.0) * 0.618) - 0.5 ) * (nileWidth * 0.85);
+    float boatZ = mod(local.y + uTime * 1.65 + 120.0, 26.0) - 13.0;
+    float boatX = nileDist - laneOffset;
+    // Wooden hull
+    if (abs(boatX) < 1.15 && abs(boatZ) < 3.4 * (1.0 - abs(boatX) * 0.55)) {
+      float hullH = 0.45;
+      // Tall curved white lateen sail
+      float sailCurve = abs(boatX - 0.15 * (1.0 - (boatZ / 3.0) * (boatZ / 3.0)));
+      if (sailCurve < 0.42 && abs(boatZ) < 2.5) {
+        float sailH = 4.8 * (1.0 - (boatZ + 2.5) / 5.4);
+        return vec4(max(hullH, sailH), 3.5, 0.0, 0.4);
+      }
+      return vec4(hullH, 3.2, 0.0, 0.6);
+    }
+  }
+
+  // 2. West Bank Monumental Temple Complex (Pylons, Hypostyle Colonnade, Obelisks, Quay Wall)
+  // Positioned right along the West Bank overlooking the Nile!
+  vec2 tLocal = vec2(nileDist - (nileWidth + 11.0), local.y - 6.0);
+
+  // Waterfront stone quay terrace
+  if (tLocal.x > -7.5 && tLocal.x < 16.0 && abs(tLocal.y) < 32.0) {
+    structH = max(structH, 2.2);
+    matId = 3.2;
+  }
+
+  // Twin Trapezoidal Temple Pylons (Front Gateway)
+  if (abs(tLocal.x + 2.5) < 3.2 && abs(tLocal.y) < 13.5 && abs(tLocal.y) > 2.0) {
+    // Battered sloped walls narrowing with height
+    float pylonH = 12.2 - max(0.0, abs(tLocal.x + 2.5) - 1.8) * 3.5;
+    if (2.2 + pylonH > structH) {
+      structH = 2.2 + pylonH;
+      matId = 3.2;
+      torchGlow = exp(-length(vec2(tLocal.x + 5.2, abs(tLocal.y) - 3.2)) * 0.35);
+    }
+  }
+
+  // Rear Pylon & Sanctuary at the back of the Hypostyle Colonnade
+  if (abs(tLocal.x - 10.5) < 2.6 && abs(tLocal.y) < 11.5) {
+    structH = max(structH, 2.2 + 9.8);
+    matId = 3.2;
+  }
+
+  // Long Hypostyle Colonnade (Row of massive papyrus columns & side architraves matching reference!)
+  if (tLocal.x > -1.0 && tLocal.x < 11.0 && abs(tLocal.y) < 26.0) {
+    // Outer colonnade rows at y = +-10.5 and x = -1.0..10.0
+    float colRowX = abs(abs(tLocal.x - 4.5) - 4.2);
+    if (colRowX < 1.15) {
+      float colModY = mod(tLocal.y + 30.0, 3.4) - 1.7;
+      float colR = length(vec2(colRowX, colModY));
+      if (colR < 0.88) {
+        structH = max(structH, 2.2 + 8.4);
+        matId = 3.2;
+        torchGlow = 0.65;
+      }
+      // Stone architrave lintel connecting column tops
+      if (abs(colModY) < 1.7 && colRowX < 0.72) {
+        structH = max(structH, 2.2 + 8.6);
+        matId = 3.2;
+      }
+    }
+  }
+
+  // Twin Carved Red-Granite Obelisks flanking the Temple Quay
+  vec2 ob1 = vec2(tLocal.x + 6.4, abs(tLocal.y) - 5.5);
+  if (max(abs(ob1.x), abs(ob1.y)) < 0.95) {
+    float obH = 15.6 - max(abs(ob1.x), abs(ob1.y)) * 4.2;
+    if (2.2 + obH > structH) {
+      structH = 2.2 + obH;
+      matId = (obH > 13.8) ? 3.3 : 3.2;
+      torchGlow = 0.55;
+    }
+  }
+
+  // 3. The Three Great Pyramids rising on the West Bank Desert Plateau behind the Temple
+  vec2 pyr1 = local - vec2(56.0, 44.0); // Khufu (Great Foreground Pyramid)
+  float p1Max = max(abs(pyr1.x), abs(pyr1.y));
+  if (p1Max < 38.0) {
+    float h1 = (38.0 - p1Max) * 0.82;
+    float steps1 = floor(h1 * 2.4) / 2.4;
+    // Preserved smooth Tura limestone casing near the top 22% of the pyramid (exact match to reference!)
+    float casingMask = smoothstep(21.5, 24.5, h1);
+    float finalP1 = groundH + mix(steps1, h1, 0.35 + 0.62 * casingMask);
+    if (finalP1 > structH) {
+      structH = finalP1;
+      matId = (casingMask > 0.5) ? 3.3 : 3.2;
+    }
+  }
+
+  vec2 pyr2 = local - vec2(92.0, 86.0); // Khafre (Second Great Pyramid)
+  float p2Max = max(abs(pyr2.x), abs(pyr2.y));
+  if (p2Max < 31.0) {
+    float h2 = (31.0 - p2Max) * 0.80;
+    float steps2 = floor(h2 * 2.4) / 2.4;
+    float finalP2 = groundH + mix(steps2, h2, 0.42);
+    if (finalP2 > structH) {
+      structH = finalP2;
+      matId = (h2 > 21.0) ? 3.3 : 3.2;
+    }
+  }
+
+  // Stepped Queen's / Satellite Pyramids at the base
+  vec2 pyr3 = local - vec2(74.0, 22.0);
+  float p3Max = max(abs(pyr3.x), abs(pyr3.y));
+  if (p3Max < 11.5) {
+    float h3 = floor((11.5 - p3Max) * 0.68 * 1.1) / 1.1;
+    if (groundH + h3 > structH) {
+      structH = groundH + h3;
+      matId = 3.2;
+    }
+  }
+
+  // 4. East Bank & West Bank Date Palm Groves + East Bank Mud-Brick Village
+  float westPalmBand = smoothstep(nileWidth * 0.85, nileWidth * 1.1, nileDist) *
+                       (1.0 - smoothstep(nileWidth + 22.0, nileWidth + 34.0, nileDist));
+  float eastOasisBand = smoothstep(-nileWidth * 0.85, -nileWidth * 1.15, nileDist) *
+                        (1.0 - smoothstep(-nileWidth - 45.0, -nileWidth - 75.0, nileDist));
+  float oasisMask = clamp(westPalmBand + eastOasisBand, 0.0, 1.0);
+
+  // East Bank Mud-Brick Courtyard Houses (right foreground/midground of Angle 3)
+  if (nileDist < -nileWidth - 3.5 && nileDist > -nileWidth - 42.0) {
+    vec2 vUv = xz * 0.24;
+    vec2 vId = floor(vUv);
+    vec2 vFr = fract(vUv) - 0.5;
+    float vRnd = hash12(vId);
+    // Leave green agricultural field strips between village clusters
+    float villageCluster = noise2D(xz * 0.045);
+    if (villageCluster > 0.42 && vRnd > 0.36 && max(abs(vFr.x), abs(vFr.y)) < 0.39) {
+      float houseH = 2.0 + 2.6 * step(0.68, vRnd);
+      // Flat roof parapet wall
+      float parapet = smoothstep(0.30, 0.38, max(abs(vFr.x), abs(vFr.y))) * 0.45;
+      if (groundH + houseH + parapet > structH) {
+        structH = groundH + houseH + parapet;
+        matId = 3.2;
+        torchGlow = step(0.62, fract(vRnd * 17.3)) * 0.9;
+      }
+    }
+  }
+
+  // Date Palm Rosette Trees lining the Nile banks & temple avenues
+  if (oasisMask > 0.05 && structH < groundH + 1.5) {
+    vec2 pUv = xz * 0.25;
+    vec2 pId = floor(pUv);
+    vec2 pFr = fract(pUv) - 0.5;
+    vec2 rnd = hash22(pId);
+    if (rnd.x > 0.32) {
+      vec2 d = pFr - (rnd - 0.5) * 0.42;
+      float r = length(d);
+      if (r < 0.38) {
+        float ang = atan(d.y, d.x);
+        float fronds = 0.62 + 0.38 * sin(ang * 11.0 + rnd.y * 6.28);
+        float palmH = (1.0 - r / 0.38) * 5.8 * fronds * oasisMask;
+        if (groundH + palmH > structH) {
+          structH = groundH + palmH;
+          matId = 3.4;
+        }
+      }
+    }
+  }
+
+  return vec4(structH, matId, oasisMask, torchGlow);
+}
+
+// ============================================================================
+// UNIFIED SOLID + WATER COMPOSITE FIELD (ZERO Z-FIGHTING ARCHITECTURE)
+// ============================================================================
+// By keeping water surface height and solid seabed/riverbed height distinct and
+// blending via water column depth, shoreline z-fighting is 100% eliminated.
+vec4 mapWorld(vec2 xz, bool highDetail) {
+  vec3 w = getBiomeWeights(xz);
+
+  vec4 amz = vec4(-2.0, 1.0, 0.0, 0.0);
+  vec4 sea = vec4(-1.0, 2.0, 0.0, 0.0);
+  vec4 egy = vec4(-2.0, 3.0, 0.0, 0.0);
+
+  if (w.x > 0.002) amz = evalAmazonSolid(xz, w.y, highDetail);
+  if (w.y > 0.002) sea = evalSeaSurface(xz, w.x + w.z, highDetail);
+  if (w.z > 0.002) egy = evalEgyptSolid(xz, w.y, highDetail);
+
+  // River & Nile water level is y = 0.0; Ocean wave surface is sea.x
+  float amzSurfaceH = max(amz.x, 0.0);
+  float egySurfaceH = max(egy.x, 0.0);
+
+  float h = w.x * amzSurfaceH + w.y * sea.x + w.z * egySurfaceH;
+
+  // Smooth coastal berm transition
+  float ecotoneCoast = w.y * (w.x + w.z);
+  if (ecotoneCoast > 0.01) {
+    float berm = smoothstep(0.32, 0.68, w.x + w.z) * 0.9;
+    h = mix(h, max(sea.x, berm - 0.3), ecotoneCoast * 1.25);
+  }
+
+  if (w.x >= w.y && w.x >= w.z) {
+    // Encode whether point is Amazon river water (amz.x < 0.0) in negative matId
+    float mat = (amz.x < 0.02) ? 1.1 : 1.0;
+    return vec4(h, mat, amz.z, amz.w);
+  } else if (w.y >= w.x && w.y >= w.z) {
+    return vec4(h, 2.0, sea.z, sea.w);
+  } else {
+    float mat = (egy.x < 0.02) ? 3.1 : egy.y;
+    return vec4(h, mat, egy.z, egy.w);
+  }
+}
+
+vec3 calcNormal(vec3 p, float t) {
+  // Distance-scaled finite difference filter prevents sub-pixel normal aliasing & shimmer
+  float eps = clamp(0.07 + t * 0.0022, 0.07, 0.75);
+  vec2 e = vec2(eps, 0.0);
+  float hC = mapWorld(p.xz, true).x;
+  float hX = mapWorld(p.xz + e.xy, true).x;
+  float hZ = mapWorld(p.xz + e.yx, true).x;
+  return normalize(vec3(hC - hX, eps, hC - hZ));
+}
+
+// ============================================================================
+// PHYSICALLY-BASED RAYLEIGH + MIE ATMOSPHERIC SCATTERING & DAY/NIGHT SKY
+// ============================================================================
+vec3 renderAtmosphericSky(vec3 rd, vec3 sunDir, out vec3 sunIrradiance, out vec3 ambientIrradiance) {
+  float sunEl = sunDir.y;
+  float dayFactor = smoothstep(-0.12, 0.22, sunEl);
+  float twilightFactor = smoothstep(-0.22, 0.05, sunEl) * (1.0 - smoothstep(0.05, 0.35, sunEl));
+  float nightFactor = 1.0 - smoothstep(-0.04, 0.12, sunEl);
+
+  float overcast = clamp(uWeather.x * 0.78 + uWeather.y * 0.55, 0.0, 0.92);
+
+  vec3 noonSunCol = vec3(1.28, 1.16, 0.98);
+  vec3 goldenSunCol = vec3(1.28, 0.68, 0.26);
+  vec3 moonCol = vec3(0.20, 0.30, 0.48);
+  sunIrradiance = mix(
+    moonCol * nightFactor,
+    mix(goldenSunCol, noonSunCol, smoothstep(0.05, 0.48, sunEl)),
+    dayFactor
+  ) * (1.0 - overcast * 0.65);
+
+  vec3 dayAmb = mix(vec3(0.34, 0.26, 0.36), vec3(0.26, 0.42, 0.58), smoothstep(0.0, 0.45, sunEl));
+  vec3 nightAmb = vec3(0.045, 0.075, 0.15);
+  ambientIrradiance = mix(nightAmb, dayAmb, dayFactor);
+  ambientIrradiance = mix(ambientIrradiance, vec3(0.22, 0.26, 0.30) * (0.25 + 0.75 * dayFactor), overcast);
+
+  float mu = dot(rd, sunDir);
+  float rayleighPhase = 0.75 * (1.0 + mu * mu);
+  float g = clamp(0.76 + uFogDensity * 0.06 + uWeather.y * 0.08, 0.65, 0.92);
+  float miePhase = (1.0 - g * g) / (4.0 * 3.14159 * pow(max(1.0 + g * g - 2.0 * g * mu, 0.001), 1.5));
+
+  float zenithCos = max(rd.y, 0.02);
+  float opticalMass = 1.0 / (zenithCos + 0.15 * pow(93.885 - acos(zenithCos) * 57.295, -1.253));
+  float horizonGlow = clamp(1.0 - exp(-opticalMass * 0.22 * uFogDensity), 0.0, 1.0);
+
+  vec3 zenithDay   = vec3(0.11, 0.28, 0.60) * rayleighPhase * 0.85;
+  vec3 zenithDusk  = vec3(0.16, 0.14, 0.34);
+  vec3 zenithNight = vec3(0.015, 0.025, 0.065);
+  vec3 zenithCol   = mix(zenithNight, mix(zenithDusk, zenithDay, smoothstep(0.0, 0.38, sunEl)), smoothstep(-0.18, 0.15, sunEl));
+
+  vec3 horizDay    = vec3(0.64, 0.80, 0.94);
+  vec3 horizGolden = vec3(0.98, 0.62, 0.30);
+  vec3 horizNight  = vec3(0.035, 0.065, 0.13);
+  vec3 horizCol    = mix(horizNight, mix(horizGolden, horizDay, smoothstep(0.12, 0.52, sunEl)), smoothstep(-0.15, 0.12, sunEl));
+  horizCol += vec3(0.96, 0.42, 0.18) * twilightFactor * pow(clamp(mu, 0.0, 1.0), 2.0) * 0.65;
+
+  vec3 sky = mix(zenithCol, horizCol, horizonGlow);
+
+  if (sunEl > -0.08) {
+    float sunVis = smoothstep(-0.08, 0.05, sunEl) * (1.0 - overcast * 0.85);
+    sky += sunIrradiance * miePhase * 0.35 * sunVis;
+    sky += vec3(1.0, 0.96, 0.88) * smoothstep(0.9982, 0.9998, mu) * 2.6 * sunVis;
+  }
+
+  if (nightFactor > 0.01 && rd.y > 0.0) {
+    vec3 moonDir = normalize(vec3(-sunDir.x, abs(sunDir.y) + 0.32, -sunDir.z));
+    float moonDot = dot(rd, moonDir);
+    vec2 starUv = rd.xz / (rd.y + 0.35) * 95.0;
+    vec2 starId = floor(starUv);
+    vec2 starFr = fract(starUv) - 0.5;
+    float starRnd = hash12(starId);
+    if (starRnd > 0.965) {
+      float twinkle = 0.65 + 0.35 * sin(uTime * 3.5 + starRnd * 45.0);
+      float starSpot = smoothstep(0.18, 0.02, length(starFr)) * twinkle;
+      sky += vec3(0.85, 0.92, 1.0) * starSpot * nightFactor * (1.0 - overcast) * smoothstep(0.02, 0.25, rd.y);
+    }
+    sky += vec3(0.25, 0.38, 0.62) * pow(max(moonDot, 0.0), 12.0) * 0.45 * nightFactor * (1.0 - overcast);
+    sky += vec3(0.92, 0.96, 1.0) * smoothstep(0.9982, 0.9994, moonDot) * 1.8 * nightFactor * (1.0 - overcast);
+  }
+
+  if (rd.y > 0.01) {
+    vec2 cloudUv = rd.xz / (rd.y + 0.12) * 1.8 + vec2(uTime * 0.018, -uTime * 0.009);
+    float c1 = fbm4(cloudUv);
+    float c2 = fbm4(cloudUv * 2.3 + vec2(1.7, 3.2));
+    float cloudVal = c1 * 0.68 + c2 * 0.32;
+    float coverage = mix(0.48, 0.22, overcast);
+    float cloudMask = smoothstep(coverage, coverage + 0.32, cloudVal) * smoothstep(0.01, 0.14, rd.y);
+
+    vec3 cloudBase = mix(vec3(0.08, 0.10, 0.15), vec3(0.68, 0.66, 0.70), dayFactor);
+    vec3 cloudSun  = mix(cloudBase, sunIrradiance * 1.18, pow(clamp(mu, 0.0, 1.0), 2.0) * (1.0 - overcast * 0.6));
+    cloudSun = mix(cloudSun, vec3(0.16, 0.19, 0.24) * (0.25 + 0.75 * dayFactor), uWeather.x * 0.78);
+
+    if (uWeather.x > 0.4) {
+      float flash = pow(max(0.0, sin(uTime * 1.9) * sin(uTime * 7.3)), 16.0) * uWeather.x;
+      cloudSun += vec3(0.55, 0.68, 0.95) * flash * smoothstep(0.5, 0.8, c1);
+    }
+
+    sky = mix(sky, cloudSun, cloudMask * (0.68 + 0.28 * overcast));
+  }
+
+  return sky;
+}
+
+vec3 applyAerialPerspective(
+  vec3 surfaceCol,
+  vec3 p,
+  vec3 rd,
+  float t,
+  vec3 sunDir,
+  vec3 skyCol,
+  vec3 sunIrradiance,
+  vec3 biomeW
+) {
+  float effFog = uFogDensity * (1.0 + uWeather.y * 1.35 + uWeather.x * 0.65);
+
+  vec3 amazonMist = vec3(0.88, 0.72, 0.46); // Golden humid canopy mist matching reference 1!
+  vec3 seaSpray   = vec3(0.68, 0.80, 0.90);
+  vec3 desertDust = vec3(0.94, 0.76, 0.52);
+  vec3 biomeTint  = biomeW.x * amazonMist + biomeW.y * seaSpray + biomeW.z * desertDust;
+
+  float dayVis = smoothstep(-0.15, 0.20, sunDir.y);
+  vec3 scatterTint = mix(vec3(0.05, 0.08, 0.16), biomeTint, dayVis);
+
+  float distExtinction = 1.0 - exp(-pow(t * 0.0036 * effFog, 1.28));
+  // Low-lying canopy pocket mist (pools between tree crowns at y = 2..14m)
+  float canopyPocketMist = exp(-max(p.y - 3.5, 0.0) * (0.07 - uWeather.y * 0.025)) *
+                           (0.55 + 0.45 * noise2D(p.xz * 0.045 + uTime * 0.03)) *
+                           (1.0 - exp(-t * 0.011 * effFog)) * (0.48 + 0.42 * uWeather.y);
+
+  float sunForward = pow(clamp(dot(rd, sunDir), 0.0, 1.0), 3.0) * smoothstep(-0.05, 0.25, sunDir.y);
+  vec3 inScatterCol = mix(skyCol * 0.65 + scatterTint * 0.35, sunIrradiance * 1.08, sunForward * 0.62);
+
+  float totalFog = clamp(distExtinction + canopyPocketMist, 0.0, 0.96);
+  return mix(surfaceCol, inScatterCol, totalFog);
+}
+
+float calcSoftShadow(vec3 ro, vec3 rd, float maxT) {
+  if (rd.y < 0.02) return 0.15;
+  float res = 1.0;
+  float t = 0.9;
+  for (int i = 0; i < 16; i++) {
+    vec3 p = ro + rd * t;
+    float h = mapWorld(p.xz, false).x;
+    float diff = p.y - h;
+    if (diff < 0.02) return 0.12;
+    res = min(res, 6.0 * diff / t);
+    t += clamp(diff * 0.65, 0.6, 4.5);
+    if (t > maxT) break;
+  }
+  return clamp(res, 0.12, 1.0);
+}
+
+vec3 evalVolumetricAtmosphere(vec3 ro, vec3 rd, float maxDist, vec3 sunDir, vec3 sunIrradiance) {
+  vec3 accumCol = vec3(0.0);
+
+  if (sunDir.y > -0.05) {
+    int steps = (uQuality == 2) ? 10 : 7;
+    float marchDist = min(maxDist, 140.0);
+    float stepLen = marchDist / float(steps);
+    float jitter = hash12(gl_FragCoord.xy + fract(uTime));
+    float rayAccum = 0.0;
+
+    for (int i = 0; i < 10; i++) {
+      if (i >= steps) break;
+      float t = (float(i) + jitter) * stepLen;
+      vec3 pos = ro + rd * t;
+      float shaftNoise = noise2D(pos.xz * 0.085 - sunDir.xz * pos.y * 0.14 + uTime * 0.06);
+      float heightAtten = exp(-max(pos.y - 5.0, 0.0) * 0.05);
+      rayAccum += smoothstep(0.30, 0.76, shaftNoise) * heightAtten;
+    }
+    float phase = pow(clamp(dot(rd, sunDir), 0.0, 1.0), 2.8);
+    float fogBoost = uFogDensity * (1.0 + uWeather.y * 0.65) * (1.0 - uWeather.x * 0.5);
+    accumCol += sunIrradiance * (rayAccum / float(steps)) * (0.22 + 0.90 * phase) * fogBoost * 0.42;
+  }
+
+  if (uWeather.x > 0.02) {
+    vec2 windTilt = vec2(rd.x / max(abs(rd.z) + 0.4, 0.25), rd.y) + vec2(rd.y * 0.22, 0.0);
+    vec2 rUv1 = windTilt * vec2(42.0, 8.0) + vec2(uTime * 2.4, uTime * 24.0);
+    float r1 = smoothstep(0.92, 0.99, noise2D(rUv1)) * smoothstep(8.0, 35.0, maxDist);
+    vec2 rUv2 = windTilt * vec2(85.0, 14.0) + vec2(uTime * 3.8 + 7.1, uTime * 32.0);
+    float r2 = smoothstep(0.93, 0.995, noise2D(rUv2)) * smoothstep(22.0, 95.0, maxDist);
+
+    float dayLuma = clamp(0.25 + 0.75 * smoothstep(-0.15, 0.25, sunDir.y), 0.25, 1.0);
+    vec3 rainColor = vec3(0.68, 0.76, 0.86) * dayLuma;
+    accumCol += rainColor * (r1 * 0.22 + r2 * 0.15) * uWeather.x;
+  }
+
+  return accumCol;
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution.xy) / uResolution.y;
+
+  float yaw = uCamRot.x;
+  float pitch = uCamRot.y;
+  vec3 forward = normalize(vec3(sin(yaw) * cos(pitch), sin(pitch), -cos(yaw) * cos(pitch)));
+  vec3 right   = normalize(cross(forward, vec3(0.0, 1.0, 0.0)));
+  vec3 up      = cross(right, forward);
+  vec3 rd      = normalize(forward + uv.x * right + uv.y * up);
+
+  vec3 sunDir = normalize(vec3(
+    sin(uSunDir.x) * cos(uSunDir.y),
+    sin(uSunDir.y),
+    -cos(uSunDir.x) * cos(uSunDir.y)
+  ));
+  vec3 activeLightDir = (sunDir.y >= -0.02)
+    ? normalize(vec3(sunDir.x, max(sunDir.y, 0.04), sunDir.z))
+    : normalize(vec3(-sunDir.x, abs(sunDir.y) + 0.28, -sunDir.z));
+
+  vec3 sunIrradiance, skyAmbient;
+  vec3 skyCol = renderAtmosphericSky(rd, sunDir, sunIrradiance, skyAmbient);
+
+  float t = 0.5;
+  float maxT = (uQuality == 0) ? 270.0 : 380.0;
+  int maxSteps = (uQuality == 0) ? 76 : ((uQuality == 1) ? 108 : 140);
+  bool hit = false;
+  vec4 hitData = vec4(0.0);
+
+  if (uCamPos.y > 44.0 && rd.y < -0.01) {
+    t = max(0.5, (uCamPos.y - 44.0) / (-rd.y));
+  }
+
+  for (int i = 0; i < 140; i++) {
+    if (i >= maxSteps) break;
+    vec3 p = uCamPos + rd * t;
+    if (p.y > 48.0 && rd.y > 0.0) break;
+
+    bool detail = (t < 95.0);
+    vec4 hData = mapWorld(p.xz, detail);
+    float diff = p.y - hData.x;
+
+    // Band-limited intersection threshold eliminates z-fighting & surface acne
+    if (diff < (0.012 + 0.0016 * t)) {
+      hit = true;
+      hitData = hData;
+      break;
+    }
+
+    t += max(diff * 0.52, 0.11 + 0.0075 * t);
+    if (t > maxT) break;
+  }
+
+  vec3 col = skyCol;
+
+  if (hit) {
+    vec3 p = uCamPos + rd * t;
+    vec3 n = calcNormal(p, t);
+    vec3 v = -rd;
+    vec3 hVec = normalize(activeLightDir + v);
+
+    vec3 biomeW = getBiomeWeights(p.xz);
+    float nightFactor = 1.0 - smoothstep(-0.05, 0.12, sunDir.y);
+    float wetness = clamp(uWeather.x * 0.85, 0.0, 0.85);
+    float footprint = clamp(t * 0.0025, 0.0, 0.85); // Anti-shimmer mip attenuation
+
+    float ndotl = max(dot(n, activeLightDir), 0.0);
+    float shadow = (t < 150.0 && uWeather.x < 0.75)
+      ? calcSoftShadow(p + n * 0.28, activeLightDir, 45.0)
+      : mix(1.0, 0.55, uWeather.x);
+    float fresnel = pow(1.0 - max(dot(n, v), 0.0), 4.0);
+    vec3 hemiAmbient = skyAmbient * (0.55 + 0.45 * n.y);
+
+    float rainRipples = 0.0;
+    if (uWeather.x > 0.05 && t < 75.0) {
+      vec2 rGrid = p.xz * 2.8;
+      vec2 rId = floor(rGrid);
+      vec2 rFr = fract(rGrid) - 0.5;
+      float rPhase = fract(uTime * 1.8 + hash12(rId));
+      float ring = sin(max(0.0, length(rFr) - rPhase * 0.45) * 42.0) * (1.0 - rPhase);
+      rainRipples = ring * smoothstep(0.45, 0.05, length(rFr)) * uWeather.x * (1.0 - footprint);
+    }
+
+    vec3 colAmazon = vec3(0.0);
+    vec3 colSea    = vec3(0.0);
+    vec3 colEgypt  = vec3(0.0);
+
+    // ------------------------------------------------------------------------
+    // 1. AMAZONIAN RAINFOREST, KAPOK TRUNKS, LIANAS & GOLDEN BLACKWATER RIVER
+    // ------------------------------------------------------------------------
+    if (biomeW.x > 0.005) {
+      vec4 amzSample = (hitData.y < 1.5) ? hitData : evalAmazonSolid(p.xz, biomeW.y, t < 90.0);
+      float metaZ = amzSample.z;
+      float emergent = amzSample.w;
+
+      // Smooth shoreline water transition (zero z-fighting!)
+      float riverWaterBlend = smoothstep(0.18, -0.05, p.y) * smoothstep(0.25, 0.0, metaZ);
+
+      // Foliage & Kapok Tree Shading
+      float leafVar = fbm4(p.xz * 0.55);
+      vec3 deepJungle = vec3(0.035, 0.14, 0.04);
+      vec3 midEmerald = vec3(0.10, 0.30, 0.07);
+      vec3 sunlitGold = vec3(0.38, 0.50, 0.11);
+
+      vec3 albedo = mix(deepJungle, midEmerald, smoothstep(0.2, 0.8, leafVar));
+      albedo = mix(albedo, sunlitGold, emergent * 0.48 + smoothstep(10.0, 22.0, p.y) * 0.38);
+
+      // Exposed pale silver-grey Kapok trunk, buttress roots & hanging liana vines
+      float steepSlope = smoothstep(0.68, 0.25, n.y) * smoothstep(1.5, 16.0, p.y);
+      float heroTrunkMask = clamp((metaZ - 2.0), 0.0, 1.0);
+      float barkFactor = max(steepSlope * 0.8, heroTrunkMask * smoothstep(15.5, 9.0, p.y));
+      // Vertical hanging liana vines & fluted trunk ribs
+      float lianaVines = sin(p.x * 6.5 + p.z * 6.5) * 0.5 + 0.5;
+      vec3 barkCol = mix(vec3(0.42, 0.40, 0.36), vec3(0.24, 0.28, 0.16), lianaVines * 0.45);
+      albedo = mix(albedo, barkCol, barkFactor);
+
+      // Coastal sandbar transition
+      float beachZone = smoothstep(1.2, -0.4, p.y) * smoothstep(0.08, 0.45, biomeW.y);
+      albedo = mix(albedo, vec3(0.58, 0.48, 0.34) * (1.0 - 0.35 * wetness), beachZone);
+      albedo *= (1.0 - wetness * 0.25);
+
+      float backLight = pow(clamp(dot(rd, -activeLightDir + n * 0.45), 0.0, 1.0), 2.4);
+      vec3 sss = vec3(0.48, 0.68, 0.12) * backLight * (1.0 - barkFactor * 0.8) * shadow;
+      float ao = clamp(0.32 + 0.68 * smoothstep(0.0, 15.0, p.y), 0.25, 1.0);
+      float waxySpec = pow(max(dot(n, hVec), 0.0), mix(28.0, 64.0, wetness)) * (0.18 + 0.38 * wetness) * shadow;
+
+      vec3 foliageCol = albedo * (sunIrradiance * ndotl * shadow + hemiAmbient * ao) + sss + sunIrradiance * waxySpec;
+
+      if (nightFactor > 0.05) {
+        float sporeNoise = pow(noise2D(p.xz * 1.45 + vec2(sin(uTime * 0.5) * 0.2)), 6.0);
+        float bankProximity = exp(-abs(p.y - 1.2) * 0.35);
+        foliageCol += vec3(0.08, 0.88, 0.45) * sporeNoise * bankProximity * nightFactor * 1.4;
+      }
+
+      if (riverWaterBlend > 0.005) {
+        vec2 rUv = p.xz * 1.5 + vec2(uTime * 0.32, -uTime * 0.22);
+        vec3 waterN = normalize(vec3(
+          (sin(rUv.x * 3.2 + noise2D(rUv) * 3.5) * 0.03 + rainRipples * 0.08) * (1.0 - footprint),
+          1.0,
+          (cos(rUv.y * 3.2) * 0.03 + rainRipples * 0.08) * (1.0 - footprint)
+        ));
+        vec3 dummySun, dummyAmb;
+        vec3 reflSky = renderAtmosphericSky(reflect(rd, waterN), sunDir, dummySun, dummyAmb);
+        // Overhanging riverbank tree reflection silhouettes along the edges of the river!
+        float zScaled = p.z * 0.024;
+        float rCenter = -156.0 + sin(zScaled + 0.5) * 18.0 + cos(zScaled * 0.55 - 0.4) * 12.0;
+        float bankReflMask = smoothstep(3.2, 9.8, abs(p.x - rCenter));
+        vec3 canopyReflCol = vec3(0.04, 0.09, 0.03) * (0.2 + 0.8 * (1.0 - nightFactor));
+        vec3 riverRefl = mix(reflSky * vec3(1.08, 0.88, 0.68), canopyReflCol, bankReflMask * 0.82);
+
+        vec3 tanninBase = vec3(0.045, 0.028, 0.015);
+        float spec = pow(max(dot(waterN, hVec), 0.0), 110.0) * shadow * (1.0 - bankReflMask * 0.7);
+        vec3 waterCol = mix(tanninBase, riverRefl, 0.32 + 0.64 * fresnel) + sunIrradiance * spec * 1.25;
+        colAmazon = mix(foliageCol, waterCol, riverWaterBlend);
+      } else {
+        colAmazon = foliageCol;
+      }
+    }
+
+    // ------------------------------------------------------------------------
+    // 2. ENDLESS LIVING SEA, TURQUOISE ROLLER & CORAL REEF LAGOON
+    // ------------------------------------------------------------------------
+    if (biomeW.y > 0.005) {
+      vec4 seaSample = (abs(hitData.y - 2.0) < 0.1) ? hitData : evalSeaSurface(p.xz, biomeW.x + biomeW.z, t < 90.0);
+      float foamMask = seaSample.z;
+      float crestAmt = seaSample.w;
+
+      float distRough = clamp(t * 0.0028, 0.0, 0.48);
+      vec2 microUv = p.xz * 2.4 + vec2(uTime * 0.85, -uTime * 0.65);
+      vec3 microN = vec3(
+        ((noise2D(microUv) - 0.5) * 0.15 + rainRipples * 0.12) * (1.0 - distRough),
+        1.0,
+        ((noise2D(microUv * 1.4 + 3.1) - 0.5) * 0.15 + rainRipples * 0.12) * (1.0 - distRough)
+      );
+      vec3 waterN = normalize(n + microN * 0.36);
+
+      // Refracted underwater coral reef heads in the foreground trough (matching reference photo 2!)
+      vec2 refractedXz = p.xz + waterN.xz * 1.4;
+      float coralElev = evalCoralSeabed(refractedXz);
+      float waterColumnDepth = max(0.2, p.y - coralElev);
+      float fgReefVis = (1.0 - smoothstep(22.0, 75.0, t)) * smoothstep(3.6, 0.6, waterColumnDepth);
+
+      float coralDetail = fbm5(refractedXz * 0.65);
+      vec3 coralRockCol = mix(vec3(0.03, 0.11, 0.14), vec3(0.16, 0.38, 0.32), smoothstep(0.25, 0.78, coralDetail));
+      float caustics = pow(noise2D(refractedXz * 1.85 + vec2(uTime * 1.3, -uTime * 0.9)), 3.0) * (1.0 - distRough);
+      coralRockCol += vec3(0.08, 0.48, 0.52) * caustics * 0.85 * (1.0 - nightFactor * 0.8);
+
+      vec3 deepPelagic = vec3(0.010, 0.058, 0.155) * (0.2 + 0.8 * (1.0 - nightFactor));
+      vec3 shallowTurquoise = vec3(0.015, 0.38, 0.46) * (0.25 + 0.75 * (1.0 - nightFactor));
+      vec3 waterBodyCol = mix(deepPelagic, mix(shallowTurquoise, coralRockCol, fgReefVis * 0.82), fgReefVis);
+
+      // Crystalline Cyan-Turquoise Subsurface Scattering inside the curling wave crest!
+      float backScatter = pow(clamp(dot(rd, -activeLightDir + waterN * 0.6), 0.0, 1.0), 2.0);
+      float crestTranslucency = pow(crestAmt, 1.35) * (0.45 + 0.55 * backScatter);
+      vec3 turquoiseSSS = vec3(0.02, 0.76, 0.80) * crestTranslucency * length(sunIrradiance) * 0.95;
+
+      vec3 dummySun, dummyAmb;
+      vec3 reflCol = renderAtmosphericSky(reflect(rd, waterN), sunDir, dummySun, dummyAmb);
+
+      // Dual-lobe solar glitter path across wave facets
+      float specTight = pow(max(dot(waterN, hVec), 0.0), mix(220.0, 42.0, distRough)) * (1.6 - distRough);
+      float specBroad = pow(max(dot(waterN, hVec), 0.0), 24.0) * 0.22;
+
+      colSea = mix(waterBodyCol + turquoiseSSS, reflCol, clamp(0.10 + 0.78 * fresnel * (1.0 - crestTranslucency * 0.45), 0.0, 0.90));
+      colSea += sunIrradiance * (specTight + specBroad);
+
+      // Billowy whitecap wave-crest foam & cellular trailing foam streaks
+      float foamCells = fbm4(p.xz * 2.1 + vec2(uTime * 0.35, -uTime * 0.25));
+      float streakPattern = smoothstep(0.42, 0.78, sin(p.x * 0.8 + p.z * 0.4 + foamCells * 3.5));
+      float lacyFoam = smoothstep(0.26, 0.68, foamMask * (0.52 + 0.68 * foamCells) + streakPattern * foamMask * 0.25);
+
+      // Subtle 3D normal bump on thick whitecap foam
+      vec3 foamN = normalize(waterN + vec3((foamCells - 0.5) * 0.35, 0.5, (foamCells - 0.5) * 0.35));
+      float foamDiff = max(dot(foamN, activeLightDir), 0.38);
+      vec3 foamCol = vec3(0.94, 0.97, 1.0) * (sunIrradiance * foamDiff * 0.85 + hemiAmbient * 0.65);
+
+      if (nightFactor > 0.05) {
+        foamCol += vec3(0.04, 0.78, 0.98) * lacyFoam * (0.45 + 0.55 * crestAmt) * nightFactor * 0.85;
+      }
+
+      colSea = mix(colSea, foamCol, lacyFoam * 0.92);
+    }
+
+    // ------------------------------------------------------------------------
+    // 3. ANCIENT EGYPTIAN CIVILIZATION, NILE FELUCCAS & SAHARAN DUNES
+    // ------------------------------------------------------------------------
+    if (biomeW.z > 0.005) {
+      vec4 egySample = (hitData.y >= 2.9) ? hitData : evalEgyptSolid(p.xz, biomeW.y, t < 90.0);
+      float mat = egySample.y;
+      float torchGlow = egySample.w;
+
+      // Smooth Nile water transition (zero z-fighting at riverbanks & boat hulls!)
+      float nileWaterBlend = smoothstep(0.16, -0.04, p.y) * step(mat, 3.15);
+
+      vec3 landCol = vec3(0.0);
+
+      if (abs(mat - 3.5) < 0.05) {
+        // Felucca White/Cream Woven Linen Lateen Sail
+        vec3 sailAlbedo = vec3(0.95, 0.90, 0.80);
+        float sailBacklight = pow(clamp(dot(rd, -activeLightDir), 0.0, 1.0), 2.0) * 0.45;
+        landCol = sailAlbedo * (sunIrradiance * (ndotl * 0.75 + 0.25 + sailBacklight) * shadow + hemiAmbient);
+      } else if (abs(mat - 3.4) < 0.05) {
+        // Lush Nile Date Palms & Agricultural Plots
+        float frondTex = noise2D(p.xz * 2.8);
+        vec3 palmCol = mix(vec3(0.08, 0.24, 0.06), vec3(0.24, 0.43, 0.11), frondTex) * (1.0 - wetness * 0.2);
+        landCol = palmCol * (sunIrradiance * ndotl * shadow + hemiAmbient * 0.85);
+      } else if (abs(mat - 3.3) < 0.05) {
+        // Smooth Tura Limestone Apex Casing / Electrum Capstone
+        vec3 casingAlbedo = vec3(0.92, 0.78, 0.52);
+        float casingSpec = pow(max(dot(n, hVec), 0.0), 54.0) * shadow * 0.65;
+        landCol = casingAlbedo * (sunIrradiance * ndotl * shadow + hemiAmbient) + sunIrradiance * casingSpec;
+      } else if (abs(mat - 3.2) < 0.05) {
+        // Weathered Limestone Pyramids, Sandstone Temple Pylons, Columns & Mud-Brick Town
+        float courseLines = mix(smoothstep(0.08, 0.22, fract(p.y * 2.4)), 1.0, footprint);
+        float blockJoints = mix(smoothstep(0.05, 0.16, fract((p.x + p.z) * 1.4 + floor(p.y * 2.4) * 0.37)), 1.0, footprint);
+        float stoneGrain  = fbm4(p.xz * 1.5 + p.y * 2.0);
+        vec3 limestone = mix(vec3(0.68, 0.54, 0.37), vec3(0.85, 0.71, 0.51), stoneGrain);
+        limestone *= (0.82 + 0.18 * courseLines * blockJoints) * (1.0 - wetness * 0.28);
+
+        float relief = mix(0.92 + 0.08 * sin(p.y * 10.0) * cos((p.x - p.z) * 12.0), 1.0, footprint);
+        float wetStoneSpec = pow(max(dot(n, hVec), 0.0), 48.0) * wetness * 0.35 * shadow;
+        landCol = limestone * relief * (sunIrradiance * ndotl * shadow + hemiAmbient * 0.85) + sunIrradiance * wetStoneSpec;
+
+        if (nightFactor > 0.02 && torchGlow > 0.01) {
+          float flicker = 0.88 + 0.12 * sin(uTime * 11.0 + p.x * 2.0) * cos(uTime * 7.5 + p.z);
+          vec3 torchRadiance = vec3(1.0, 0.46, 0.12) * torchGlow * flicker * nightFactor * 1.35;
+          landCol += limestone * torchRadiance;
+        }
+      } else {
+        // Saharan Erg Wind-Sculpted Sand Dunes & Fertile Nile Agricultural Terraces
+        float rippleTex = mix(sin(p.x * 2.4 + p.z * 1.1 + noise2D(p.xz * 0.4) * 2.5) * 0.5 + 0.5, 0.5, footprint);
+        vec3 warmSand   = vec3(0.87, 0.67, 0.42);
+        vec3 shadowSand = vec3(0.65, 0.45, 0.27);
+        vec3 sandAlbedo = mix(shadowSand, warmSand, 0.45 + 0.55 * rippleTex);
+
+        // Fertile green agricultural fields along the Nile banks (matching East Bank in reference photo 3!)
+        float cropPlots = step(0.15, fract(p.x * 0.08)) * step(0.15, fract(p.z * 0.08));
+        vec3 cropCol = mix(vec3(0.16, 0.33, 0.09), vec3(0.28, 0.45, 0.14), cropPlots);
+        sandAlbedo = mix(sandAlbedo, cropCol, smoothstep(0.08, 0.55, egySample.z) * 0.85);
+        sandAlbedo *= (1.0 - wetness * 0.32);
+
+        float sparkle = pow(hash12(floor(p.xz * 12.0)), 18.0) * shadow * (1.0 - wetness) * (1.0 - footprint);
+        float wetSandSpec = pow(max(dot(n, hVec), 0.0), 56.0) * wetness * 0.42 * shadow;
+        float rimSand = pow(1.0 - max(dot(n, v), 0.0), 3.0) * 0.18;
+        landCol = sandAlbedo * (sunIrradiance * ndotl * shadow + hemiAmbient * 0.9) +
+                  sunIrradiance * (rimSand + sparkle * 0.55 + wetSandSpec);
+      }
+
+      if (nileWaterBlend > 0.005) {
+        vec2 nUv = p.xz * 1.6 + vec2(uTime * 0.4, -uTime * 0.3);
+        vec3 waterN = normalize(vec3(
+          (sin(nUv.x * 2.8) * 0.025 + rainRipples * 0.06) * (1.0 - footprint),
+          1.0,
+          (cos(nUv.y * 2.8) * 0.025 + rainRipples * 0.06) * (1.0 - footprint)
+        ));
+        vec3 dummySun, dummyAmb;
+        vec3 reflCol = renderAtmosphericSky(reflect(rd, waterN), sunDir, dummySun, dummyAmb);
+        vec3 nileBase = vec3(0.04, 0.25, 0.32) * (0.25 + 0.75 * (1.0 - nightFactor));
+        float spec = pow(max(dot(waterN, hVec), 0.0), 115.0) * shadow;
+        vec3 nileWaterCol = mix(nileBase, reflCol, 0.22 + 0.65 * fresnel) + sunIrradiance * spec;
+        colEgypt = mix(landCol, nileWaterCol, nileWaterBlend);
+      } else {
+        colEgypt = landCol;
+      }
+    }
+
+    col = biomeW.x * colAmazon + biomeW.y * colSea + biomeW.z * colEgypt;
+    col = applyAerialPerspective(col, p, rd, t, sunDir, skyCol, sunIrradiance, biomeW);
+  }
+
+  col += evalVolumetricAtmosphere(uCamPos, rd, hit ? t : maxT, sunDir, sunIrradiance);
+
+  // ACES Filmic Tone Mapping & Gamma Correction
+  col = (col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14);
+  col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));
+
+  fragColor = vec4(col, 1.0);
+}</script>
+<script>
+const PRESETS = {
+  1: { pos: [-160.0, 19.5, -26.0], yaw: 0.08, pitch: -0.13, fog: 1.15, lock: 1 },
+  2: { pos: [0.0, 4.3, -155.0],    yaw: 0.06, pitch: -0.15, fog: 0.82, lock: 2 },
+  3: { pos: [168.0, 23.5, -38.0],  yaw: 0.34, pitch: -0.18, fog: 0.88, lock: 3 },
+  0: { pos: [0.0, 56.0, -105.0],   yaw: 0.00, pitch: -0.32, fog: 0.78, lock: 0 }
+};
+const TOD = {
+  dawn:  { az: -0.85, el: 0.12 },
+  noon:  { az: 0.15,  el: 0.78 },
+  dusk:  { az: 0.12,  el: 0.19 },
+  night: { az: -0.45, el: -0.38 }
+};
+const WEATHER = {
+  clear: [0.0, 0.0],
+  rain:  [0.92, 0.35],
+  fog:   [0.0, 0.95]
+};
+
+let camPos = [...PRESETS[1].pos], targetPos = [...PRESETS[1].pos];
+let camYaw = PRESETS[1].yaw, camPitch = PRESETS[1].pitch, targetYaw = camYaw, targetPitch = camPitch;
+let sunAz = TOD.dusk.az, sunEl = TOD.dusk.el, targetSunAz = sunAz, targetSunEl = sunEl;
+let fogDensity = PRESETS[1].fog, biomeLock = 1;
+let weatherVec = [0.0, 0.0], targetWeather = [0.0, 0.0];
+let hudVisible = true;
+const keys = {};
+let dragging = false, lastX = 0, lastY = 0;
+
+function toggleHud() {
+  hudVisible = !hudVisible;
+  document.getElementById('hud').className = hudVisible ? '' : 'hidden';
+  document.getElementById('restore-btn').style.display = hudVisible ? 'none' : 'block';
+}
+function setAngle(idx) {
+  const p = PRESETS[idx] || PRESETS[1];
+  targetPos = [...p.pos]; targetYaw = p.yaw; targetPitch = p.pitch;
+  fogDensity = p.fog; biomeLock = p.lock;
+  [0,1,2,3].forEach(i => {
+    const el = document.getElementById('btn-' + i);
+    if (el) el.className = (i === idx) ? 'active' : '';
+  });
+}
+function setWeather(mode) {
+  targetWeather = WEATHER[mode] || [0,0];
+  ['clear','rain','fog'].forEach(m => {
+    const el = document.getElementById('w-' + m);
+    if (el) el.className = (m === mode) ? 'active' : '';
+  });
+}
+function setTod(mode) {
+  const t = TOD[mode] || TOD.dusk;
+  targetSunAz = t.az; targetSunEl = t.el;
+  ['dawn','noon','dusk','night'].forEach(m => {
+    const el = document.getElementById('t-' + m);
+    if (el) el.className = (m === mode) ? 'active' : '';
+  });
+}
+
+const urlParams = new URLSearchParams(location.search);
+if (urlParams.has('angle')) setAngle(parseInt(urlParams.get('angle'), 10) || 1);
+if (urlParams.has('weather')) setWeather(urlParams.get('weather'));
+if (urlParams.has('tod')) setTod(urlParams.get('tod'));
+if (urlParams.get('hud') === '0') toggleHud();
+
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'KeyH') toggleHud();
+});
+window.addEventListener('keyup', e => keys[e.code] = false);
+const canvas = document.getElementById('viewport');
+canvas.addEventListener('mousedown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+window.addEventListener('mouseup', () => dragging = false);
+window.addEventListener('mousemove', e => {
+  if (!dragging && document.pointerLockElement !== canvas) return;
+  const dx = (document.pointerLockElement === canvas) ? e.movementX : (e.clientX - lastX);
+  const dy = (document.pointerLockElement === canvas) ? e.movementY : (e.clientY - lastY);
+  targetYaw += dx * 0.004;
+  targetPitch = Math.max(-1.4, Math.min(1.4, targetPitch - dy * 0.004));
+  lastX = e.clientX; lastY = e.clientY;
+});
+canvas.addEventListener('dblclick', () => {
+  if (document.pointerLockElement === canvas) document.exitPointerLock();
+  else canvas.requestPointerLock();
+});
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.35);
+  canvas.width = Math.floor(window.innerWidth * dpr);
+  canvas.height = Math.floor(window.innerHeight * dpr);
+}
+window.addEventListener('resize', resize);
+resize();
+
+const gl = canvas.getContext('webgl2', { antialias: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });
+function compileShader(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compileShader(gl.VERTEX_SHADER, document.getElementById('vs-glsl300').textContent));
+gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, document.getElementById('fs-glsl300').textContent));
+gl.linkProgram(prog);
+gl.useProgram(prog);
+
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+const uRes = gl.getUniformLocation(prog, 'uResolution');
+const uTim = gl.getUniformLocation(prog, 'uTime');
+const uPos = gl.getUniformLocation(prog, 'uCamPos');
+const uRot = gl.getUniformLocation(prog, 'uCamRot');
+const uSun = gl.getUniformLocation(prog, 'uSunDir');
+const uFog = gl.getUniformLocation(prog, 'uFogDensity');
+const uWth = gl.getUniformLocation(prog, 'uWeather');
+const uLck = gl.getUniformLocation(prog, 'uBiomeLock');
+const uQlt = gl.getUniformLocation(prog, 'uQuality');
+
+let lastTime = performance.now(), frames = 0, fps = 60;
+function frame(now) {
+  frames++;
+  if (now - lastTime >= 500) {
+    fps = Math.round((frames * 1000) / (now - lastTime));
+    document.getElementById('telemetry').textContent = fps + ' FPS';
+    frames = 0; lastTime = now;
+  }
+  const speed = keys['ShiftLeft'] || keys['ShiftRight'] ? 1.35 : 0.5;
+  const fx = Math.sin(targetYaw), fz = -Math.cos(targetYaw);
+  const rx = Math.cos(targetYaw), rz = Math.sin(targetYaw);
+  if (keys['KeyW'] || keys['ArrowUp'])    { targetPos[0] += fx * speed; targetPos[2] += fz * speed; }
+  if (keys['KeyS'] || keys['ArrowDown'])  { targetPos[0] -= fx * speed; targetPos[2] -= fz * speed; }
+  if (keys['KeyD'] || keys['ArrowRight']) { targetPos[0] += rx * speed; targetPos[2] += rz * speed; }
+  if (keys['KeyA'] || keys['ArrowLeft'])  { targetPos[0] -= rx * speed; targetPos[2] -= rz * speed; }
+  if (keys['KeyE'] || keys['Space'])      { targetPos[1] += speed * 0.7; }
+  if (keys['KeyQ'] || keys['KeyC'])       { targetPos[1] = Math.max(1.8, targetPos[1] - speed * 0.7); }
+
+  camPos[0] += (targetPos[0] - camPos[0]) * 0.14;
+  camPos[1] += (targetPos[1] - camPos[1]) * 0.14;
+  camPos[2] += (targetPos[2] - camPos[2]) * 0.14;
+  camYaw += (targetYaw - camYaw) * 0.16;
+  camPitch += (targetPitch - camPitch) * 0.16;
+  sunAz += (targetSunAz - sunAz) * 0.05;
+  sunEl += (targetSunEl - sunEl) * 0.05;
+  weatherVec[0] += (targetWeather[0] - weatherVec[0]) * 0.04;
+  weatherVec[1] += (targetWeather[1] - weatherVec[1]) * 0.04;
+
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.uniform2f(uRes, canvas.width, canvas.height);
+  gl.uniform1f(uTim, now * 0.001);
+  gl.uniform3f(uPos, camPos[0], camPos[1], camPos[2]);
+  gl.uniform2f(uRot, camYaw, camPitch);
+  gl.uniform2f(uSun, sunAz, sunEl);
+  gl.uniform1f(uFog, fogDensity);
+  gl.uniform2f(uWth, weatherVec[0], weatherVec[1]);
+  gl.uniform1i(uLck, biomeLock);
+  gl.uniform1i(uQlt, 1);
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

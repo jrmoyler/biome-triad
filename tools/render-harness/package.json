@@ -1,0 +1,12 @@
+{
+  "name": "biome-triad-render-harness",
+  "private": true,
+  "type": "module",
+  "description": "Headless renderer that screenshots biome views from index.html for visual verification",
+  "scripts": { "shot": "node shot.mjs" },
+  "dependencies": {
+    "@sparticuz/chromium": "123.0.1",
+    "puppeteer-core": "22.6.0",
+    "three": "0.160.0"
+  }
+}
