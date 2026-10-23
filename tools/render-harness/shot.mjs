@@ -3,7 +3,7 @@
 //
 //   node shot.mjs <page.html> <outPrefix> '<jobs JSON>' [width] [height]
 //   job: { "biome":"amazon", "q":"fast|balanced|ultra", "tod":"dawn|noon|dusk|night",
-//          "cam":[x, y, z, yaw, pitch], "steps":3 }
+//          "wx":"clear|rain|fog", "cam":[x, y, z, yaw, pitch], "steps":3 }
 //
 // Example:
 //   node shot.mjs ../../index.html out/amazon '[{"biome":"amazon","q":"balanced"}]' 960 540
@@ -49,6 +49,7 @@ for (const j of jobs){
     if (j.q) H.setQuality(j.q);
     if (j.biome) H.load(j.biome);
     if (j.tod) H.S.sun = H.S.tSun = ({ dawn:[-0.9,0.07], noon:[0.25,1.05], dusk:[0.1,0.09], night:[-0.5,-0.3] })[j.tod].slice();
+    if (j.wx) H.S.wx = H.S.tWx = ({ clear:[1,0], rain:[2.0,1], fog:[4.8,0] })[j.wx].slice();
     if (j.cam){ const [x,y,z,yaw,pitch] = j.cam; H.S.pos.set(x,y,z); H.S.tPos.set(x,y,z); H.S.yaw = H.S.tYaw = yaw; H.S.pitch = H.S.tPitch = pitch; }
     return H.snap(j.steps || 3);
   }, j);
