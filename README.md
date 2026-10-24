@@ -1,13 +1,18 @@
 # Biome Triad
 
-A real-time, explorable 3D biome engine built on Three.js (r160, WebGL2). It ships with six complete,
+A real-time, explorable 3D biome engine built on Three.js (r160, WebGL2). It ships with eleven complete,
 procedurally built worlds: the Amazon rainforest, tropical Sea islands, Ancient Egypt on the Nile, a frost-bitten
-Arctic archipelago, an erupting Volcanic valley and a divine Haven of floating islands above a sea of clouds.
+Arctic archipelago, an erupting Volcanic valley, a divine Haven of floating islands above a sea of clouds, an Ancient
+Temperate Forest, a Boreal Taiga, a Savanna, a Canyon and its Badlands, and Alpine Highlands. Every world runs a
+dynamic surface and environmental state layer: weather, fire and the Touch tools leave the ground wet, snowed on,
+frozen, scorched or trampled, and fire spreads with the wind.
 New biomes plug in as packages for open worlds, games and apps. Every world runs on to the horizon and keeps the
 viewer inside its playable area.
 
-**Run it:** open `index.html` in any modern browser, or serve the folder with any static host
-(GitHub Pages, Vercel, Netlify). There is no build step; three.js loads from jsDelivr through an import map.
+**Run it:** serve the folder with any static host (GitHub Pages, Vercel, Netlify, or `npx serve` locally) and open
+`index.html`. There is no build step; three.js loads from jsDelivr through an import map. Opening the file directly
+from disk also works, but browsers refuse local module imports there, so the surface layer (fire, impacts, footprints in
+the state grid) stays inert and only the weather-driven wet and snow cover is shown.
 
 | Amazon (aerial, dawn) | Amazon (river, lily pads and lianas) |
 |---|---|
@@ -28,6 +33,22 @@ viewer inside its playable area.
 | ![](docs/renders/volcano-aerial.jpg) | ![](docs/renders/haven.jpg) |
 | **Haven (tholos, halo, blossom groves)** | **Haven (sea of clouds)** |
 | ![](docs/renders/haven-temple.jpg) | ![](docs/renders/haven-cloudsea.jpg) |
+| **Forest (autumn stream at dusk)** | **Forest (elder oak with root buttresses)** |
+| ![](docs/renders/forest.jpg) | ![](docs/renders/forest-elder.jpg) |
+| **Forest (winter)** | **Taiga (frozen lake at dawn)** |
+| ![](docs/renders/forest-winter.jpg) | ![](docs/renders/taiga.jpg) |
+| **Taiga (blizzard)** | **Taiga (cracked and broken lake ice, footprints)** |
+| ![](docs/renders/taiga-blizzard.jpg) | ![](docs/renders/taiga-ice.jpg) |
+| **Savanna (controlled burn at dusk)** | **Savanna (wildfire front at night)** |
+| ![](docs/renders/savanna.jpg) | ![](docs/renders/savanna-wildfire.jpg) |
+| **Savanna (zebra herd)** | **Canyon (from the rim at golden hour)** |
+| ![](docs/renders/savanna-herd.jpg) | ![](docs/renders/canyon.jpg) |
+| **Canyon (haboob dust storm)** | **Canyon (cliff ledge trail)** |
+| ![](docs/renders/canyon-duststorm.jpg) | ![](docs/renders/canyon-ledge.jpg) |
+| **Alpine (meadow, rope bridge, glacier)** | **Alpine (avalanche)** |
+| ![](docs/renders/alpine.jpg) | ![](docs/renders/alpine-avalanche.jpg) |
+| **Alpine (storm: rain below the freezing level)** | |
+| ![](docs/renders/alpine-storm.jpg) | |
 
 ## Controls
 
@@ -38,12 +59,16 @@ viewer inside its playable area.
 | Shift | Move fast |
 | Drag | Look |
 | Double-click | Mouse lock |
-| 1–6 | Switch biome |
+| 1–9, 0, − | Switch biome |
+| Touch + click, or F | Strike the ground (fire, frost, water, storm, grow, force) where you click, or at the screen centre |
 | H | Hide controls |
 | Touch joystick | Move on phones |
 
 The HUD also switches time of day (dawn, noon, dusk, night), weather (clear, rain with lightning, fog)
-and quality (Fast, Balanced, Ultra). Phones start on Fast. Deep links: `index.html#amazon`, `#sea`, `#egypt`, `#arctic`, `#volcano`, `#haven`.
+and quality (Fast, Balanced, Ultra). Phones start on Fast. Some worlds add their own controls (the Forest's seasons).
+The line under the title reports what the world is doing (temperature, fire, canopy, wind, ice, climbing…).
+Deep links: `index.html#amazon`, `#sea`, `#egypt`, `#arctic`, `#volcano`, `#haven`, `#forest`, `#taiga`, `#savanna`,
+`#canyon`, `#alpine`.
 
 ## Engine overview
 
@@ -58,8 +83,19 @@ All code lives in `index.html`, grouped into these sections:
   `clouds: { cover, base, top, cirrus, dark }`; rain thickens and darkens the deck, fog hides it, and the planar water
   reflection gets the same sky at half the march steps. The slab is marched from whichever side the viewer is on,
   so a biome can put it below the camera (the Haven's sea of clouds).
-- **Precipitation:** rain streaks with lightning, plus world-anchored snow, ash or glowing motes chosen per biome
-  with `precip`.
+- **Precipitation:** rain streaks with lightning, plus world-anchored snow, ash, dust or glowing motes chosen per biome
+  with `precip` (a world can swap it at runtime, e.g. rain below the freezing level and snow above). `fog.storm` and
+  `fog.stormTint` turn the Rain weather into a blizzard or a dust storm.
+- **Dynamic surface & environmental state** (`extensions/surface-state`): every world runs a deterministic, sparse
+  state grid (3 m cells, 10 Hz) holding wetness, snow, ice, temperature, burn, scorch, integrity, growth, charge and
+  more. The engine feeds it the HUD weather, the world's `climate` (air temperature with a lapse rate by altitude) and a
+  veering prevailing wind; untouched ground follows an ambient field, so cells only exist where something happened.
+  Fire spreads cell to cell through dry fuel, faster downwind, and dies out as the fuel runs out or rain falls. The
+  cells around the viewer are mirrored into a 128×128 texture window that the terrain, ground cover, trees and
+  impostors read: ground goes rain-dark and glossy, snow settles where the air is freezing, frost glazes it, fire
+  leaves char and glowing embers, plants flatten when trampled and burn away, canopies are stripped and trunks charred.
+  Live fire is drawn as flames, drifting smoke and flickering firelight. The Touch tools strike the layer with fire,
+  frost, water, storm (with a lightning bolt), growth or force; worlds react through `onImpact`.
 - **World edges:** `makeTerrain({ apron })` adds a coarse ring sampled from the same height and colour functions
   (optionally lifted, e.g. into a distant canopy) out to the horizon; `bounds`, `floor` and `ceiling` keep the
   viewer inside the playable area.
@@ -113,12 +149,57 @@ All code lives in `index.html`, grouped into these sections:
     turning gold rings and two small shrines; a gilded double halo with a pillar of light and beams from the sky;
     waterfalls pouring off the rims; blossom and cypress groves, wildflowers, drifting rock debris and far islands;
     doves and golden motes.
+  - **Forest (Ancient Temperate Forest):** old-growth oak and beech in clumps and light gaps, giant elder oaks whose
+    root buttresses are part of the walkable ground, a meandering stream with bridging and hollow logs you can walk
+    across and through, a fallen-giant clearing with an upturned root plate, snags, holly and hazel, ferns, bluebells,
+    fly agaric and bracket fungi. *Seasons* (Spring, Summer, Autumn, Winter) recolour and drop the leaves on trees,
+    impostors, saplings and ground cover, repaint the leaf litter, add falling leaves, and in winter cool the air so
+    the Rain weather falls as snow. *Canopy occlusion*: a crown-cover grid shades sun and sky light, tints the
+    understorey green and drives the sun shafts (status: canopy %). *Destructible vegetation*: thousands of saplings
+    topple under Force or Storm strikes, and fire and trampling flatten the ground cover.
+  - **Taiga (Boreal Taiga):** spruce forest from a dedicated generator (drooping whorls, snow-laden needle shelves),
+    birch, wind-flagged krummholz at the treeline, a 640 m frozen lake and ponds, fallen pines, a moose, caribou on
+    the tundra and ravens. *Snow accumulation* thickens caps on rocks and logs, loads the spruce and buries trails.
+    *Footprints*: walking leaves boot prints that fresh snow fills; deer and fox tracks follow the animal trails.
+    *Breaking lake ice*: standing and running load the ice, cracks race and fork across it, it gives way under you
+    (you drop into the water), floes bob in the hole, fire melts it and frost refreezes it. *Blizzards*: the Rain
+    weather becomes a whiteout with sideways snow, gusts and spindrift (status: visibility).
+  - **Savanna (Savanna and Grasslands):** rolling plains of chest-high grass, umbrella acacias, baobabs and thorn
+    thickets, granite kopjes, termite mounds, two watering holes, herds of impala, zebra, wildebeest and giraffe, and
+    circling vultures. *Concealment*: in tall grass you are hidden (crouch with Q); exposed, you startle the herds.
+    *Wind-driven grass*: gust fronts roll across the plain along the wind. *Wildfire*: a burn is already running,
+    dry lightning ignites more in storms, embers start spot fires downwind, herds flee the front, and fuel is bounded
+    by tracks, pools and the plain's edge. *Surface dust*: dust devils, stampede dust and dust you kick up when moving
+    fast; rain lays it.
+  - **Canyon (Canyon and Badlands):** a winding gorge cut through thirteen sediment beds of cliffs and benches, side
+    canyons, buttes, hoodoos and badlands, mesas on the horizon, a braided dry wash, alcoves, crystal and copper
+    deposits, juniper, pinyon, cottonwood, yucca and agave, ravens and condors. *Rockfall*: boulders break from
+    ledges, bounce and roll down the talus, raise dust and stay as debris. *Erosion decals*: desert varnish, runoff
+    stains, tafoni and salt crust on the cliffs, mud cracks and salt rings in the wash; rain darkens and widens them.
+    *Ledge traversal*: a cliff trail keeps you on the ledge (status: drop below). *Dust storms*: the Rain weather
+    brings a haboob, then a cloudburst. *Echo propagation*: strikes, rockfall and footsteps echo off the walls with
+    delays from ray casts, panned by direction (WebAudio starts on your first click).
+  - **Alpine (Alpine Highlands):** a U-shaped valley climbing to a glacier and cirque, banded cliffs, meadows with
+    flowers, scree fans, a glacial stream with cascades, a walkable rope bridge over a gorge that sways in the wind, a
+    bolted climbing crag, a hut, choughs and eagles. *Elevation-dependent weather*: rain below the freezing level,
+    sleet around it and snow above, a cloud band at the freezing level, a snowline that falls in storms.
+    *Avalanches* release from loaded slopes or Force/Storm strikes and run down as a powder cloud and debris.
+    *Rock climbing*: walk into the crag's route and climb with W/S. *Wind exposure*: ridges are windier than hollows,
+    with buffeting, spindrift and wind chill.
 
 ## Adding a biome
 
+Beyond the fields shown below, a world can declare `climate: { temp, lapse, night }`, `surface: { cellSize, humidity,
+spread, amb }`, `options` (extra HUD buttons, delivered to `setOption`) and `windy`, and its build can return
+`materialAt(x, z)` (surface material per cell: soil, sand, stone, vegetation, organic, wood, snow, ice, water…),
+`status(env)` (the line under the title), `onImpact(element, point, radius)`, `onSurfaceEvent(event)`,
+`locomote(S, forward, right, dt, keys)` (take over movement, e.g. climbing), and live `precip`, `fogK`, `fogTint`,
+`windK` and `tempOffset` properties.
+
+
 ```js
 Helios.registerBiome({
-  id: 'taiga', label: 'Taiga',
+  id: 'tundra', label: 'Tundra',
   sky: { turbidity: 4, rayleigh: 1.5, mie: 0.005, mieG: 0.8 },
   fog: { density: 0.0012, tint: [0.9, 0.95, 1.0] },
   ground: [0.2, 0.22, 0.18],                       // hemisphere bounce colour
@@ -175,13 +256,18 @@ node shot.mjs ../../index.html out/check \
 ```
 
 Each job saves a JPEG and prints the triangle count and draw calls. A job accepts `biome`, `q`, `tod`,
-`wx` (`clear`, `rain`, `fog`), `cam` (`[x, y, z, yaw, pitch]`) and `steps`. The engine exposes
-`window.__helios` (`load`, `setQuality`, `snap`, `stats`) only for this harness.
+`wx` (`clear`, `rain`, `fog`), `cam` (`[x, y, z, yaw, pitch]`), `opt` (`["season", "winter"]`), `strike`
+(`[["fire", x, z, radius, intensity], ...]`), `sim` (seconds of weather, surface and wildlife to advance before the
+frame) and `steps`. The engine exposes `window.__helios` (`load`, `setQuality`, `snap`, `stats`, `sim`, `strike`,
+`option`, `status`) only for this harness. `PORT` sets the harness server port.
+
+The surface package has its own tests: `cd extensions/surface-state && npm test` (Node 18+).
 
 ## Repository layout
 
 ```
-index.html                     The engine and the six biomes (single file, no build)
+index.html                     The engine and the eleven biomes (single file, no build)
+extensions/surface-state/      Dynamic Surface & Environmental State layer (ES modules, zero dependencies, tests)
 docs/renders/                  Reference frames from the render harness
 tools/render-harness/          Headless screenshot tool (puppeteer + SwiftShader)
 legacy/                        The original GLSL ES 3.00 raymarched version this project grew from
@@ -202,3 +288,12 @@ legacy/                        The original GLSL ES 3.00 raymarched version this
   (about 0.6 to 1.5 million triangles at Balanced).
 - Cooled lava flows, sulfur crusts and the glacier are painted per terrain vertex, so their outlines follow the
   terrain grid (5 to 10 m) when seen from above.
+- The five newer worlds were also only measured in software. At Balanced their opening views run about 1.05 to 1.85
+  million triangles; the Forest (252), Taiga (258) and Savanna (about 300) are the heaviest in draw calls, mostly from
+  the 70 m tree tiles and their shadow pass.
+- The surface layer is a 3 m grid simulated near the viewer, so scorch, snow and ice edges are soft at that scale,
+  and the Taiga's broken-ice holes are about 1.3 m blocky. Far from the viewer only the ambient weather field shows.
+- The Canyon's echoes and footsteps could not be listened to in the headless harness; only their timing, status and
+  wall glows were checked. The Alpine glacier's seracs read pale and flat, and the Forest's fallen giant reads as a
+  smooth mossy slab from the side.
+- Herds, rooks, ravens and the avalanche run on simple CPU rules rather than real flocking or snow physics.
