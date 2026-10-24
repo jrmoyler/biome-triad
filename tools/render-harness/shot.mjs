@@ -53,6 +53,7 @@ for (const j of jobs){
     if (j.biome) H.load(j.biome);
     if (j.tod) H.S.sun = H.S.tSun = H.TOD[j.tod].slice();
     if (j.wx) H.S.wx = H.S.tWx = H.WX[j.wx].slice();
+    if (j.tod || j.wx) H.relight?.();   // re-bake the sky light for the new sun/weather
     if (j.cam){ const [x,y,z,yaw,pitch] = j.cam; H.S.pos.set(x,y,z); H.S.tPos.set(x,y,z); H.S.yaw = H.S.tYaw = yaw; H.S.pitch = H.S.tPitch = pitch; }
     if (j.opt) H.option(...j.opt);
     for (const [el, x, z, r, k] of j.strike || []) H.strike(el, x, z, r, k);

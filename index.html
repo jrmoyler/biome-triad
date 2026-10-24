@@ -2910,6 +2910,7 @@ window.__helios = { load: id => loadBiome(id), S, TOD, WX, setQuality: k => { qK
   sim(sec, dt=0.1){ for (let t=0;t<sec;t+=dt){ S.time += dt; const env = updateAtmosphere(dt); active.update?.(dt, env); surfaceFrame(dt, env); } },
   strike(el, x, z, r, k){ kit.impact(el, x, z, r, k); }, option(key, v){ document.querySelector(`#g-opt [data-k="${v}"]`)?.click(); },
   status(){ return statusEl.textContent; },
+  relight(){ envDirty = true; envTimer = 0; },
   snap(steps=3){ for (let i=0;i<steps;i++){ last -= 1000/30; frame(last + 1000/30, true); } return canvas.toDataURL('image/jpeg', 0.92); },
   stats(){ return renderer.info.render; } };
 
