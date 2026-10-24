@@ -25,6 +25,9 @@ button{font:500 11px/1 var(--mono);color:var(--ink);background:transparent;borde
 button:hover{background:rgba(243,234,217,.08)}
 button:focus-visible{outline:1px solid var(--sun);outline-offset:1px}
 button[aria-pressed="true"]{background:var(--sun);color:#1a1208}
+select{font:500 11px/1 var(--mono);color:var(--ink);background:rgba(243,234,217,.06);border:1px solid var(--line);border-radius:8px;padding:6px 8px;cursor:pointer;max-width:42vw}
+select:focus-visible{outline:1px solid var(--sun);outline-offset:1px}
+option{background:#16130f;color:var(--ink)}
 #meta{font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums;min-width:9ch;text-align:right}
 #show{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:6;background:var(--glass);border:1px solid var(--line)}
 .help{position:fixed;top:calc(14px + env(safe-area-inset-top,0px));right:max(16px,env(safe-area-inset-right,0px));z-index:5;font-size:10px;line-height:1.7;color:var(--mute);text-align:right;pointer-events:none}
@@ -39,11 +42,11 @@ button[aria-pressed="true"]{background:var(--sun);color:#1a1208}
 </style>
 
 <canvas id="c"></canvas>
-<div class="plate"><h1>Helios Triad</h1><p><b id="bname">Amazon</b> · eleven procedural worlds</p><p id="status" aria-live="polite"></p></div>
-<div class="help">WASD move · E/Q rise/sink · Shift fast<br>Drag to look · Double-click mouse-lock · 1–0, − biome · H hide<br>Pick a Touch element, then click the ground (or F) to strike it</div>
+<div class="plate"><h1>Helios Triad</h1><p><b id="bname">Amazon</b> · <span id="nworlds">seventeen</span> procedural worlds</p><p id="status" aria-live="polite"></p></div>
+<div class="help">WASD move · E/Q rise/sink · Shift fast<br>Drag to look · Double-click mouse-lock · 1–0, −, = or [ ] biome · H hide<br>Pick a Touch element, then click the ground (or F) to strike it</div>
 <div id="stick"><div id="knob"></div></div>
 <div id="hud">
-  <div class="grp" id="g-biome"><span>Biome</span></div>
+  <div class="grp" id="g-biome"><span>Biome</span><select id="biomeSel" aria-label="Biome"></select></div>
   <div class="grp" id="g-tod"><span>Light</span></div>
   <div class="grp" id="g-wx"><span>Sky</span></div>
   <div class="grp" id="g-q"><span>Quality</span></div>
@@ -75,7 +78,9 @@ addEventListener('error', e => { const m=document.getElementById('veilMsg'); if 
      climate {temp, lapse, night}       air temperature at sea level (deg C), change per metre, night drop (optional)
      options [{key, label, values:[[k,label]...], value}]   extra HUD controls; the world gets setOption(key, k)
      build(kit) -> { group, heightAt(x,z), update?(dt, env), materialAt?(x,z), status?(), setOption?(k,v),
-                     onImpact?(element, point, radius), locomote?(S, fwd, right, dt, keys), precip?, fogK? }
+                     onImpact?(element, point, radius), locomote?(S, fwd, right, dt, keys), precip?, fogK?,
+                     floorAt?(x,z,y), ceilingAt?(x,z,y)   walk floor / roof for a viewer at height y (layered worlds)
+                     lightK?, envK?, envTint?, hemiTint?, exposureK?   live dimming of daylight, sky light and exposure }
    kit gives: THREE, Q (quality), noise, rng, tex, makeTerrain (with horizon apron), makeWater, terrainMaterial,
    instTiled, forest + defineSpecies, scatter + plant geometry builders, puffField, islandGeo, tubeInto,
    smoothstep, lerp, srgb, impact (strike the surface layer). env passed to update() carries night, day, time,
@@ -130,6 +135,8 @@ const camera = new THREE.PerspectiveCamera(58, innerWidth/innerHeight, 0.5, 1600
 const sky = new Sky(); sky.scale.setScalar(12000); scene.add(sky);
 const envScene = new THREE.Scene(); const envSky = new Sky(); envSky.material = sky.material; envSky.scale.setScalar(80); envScene.add(envSky);
 const pmrem = new THREE.PMREMGenerator(renderer); let envRT = null;
+const envDim = new THREE.Mesh(new THREE.SphereGeometry(30, 16, 8), new THREE.MeshBasicMaterial({ color:0, side:THREE.BackSide, transparent:true, opacity:0, depthWrite:false }));
+envDim.visible = false; envDim.renderOrder = 1; envDim.userData.k = 1; envScene.add(envDim);
 
 const sun = new THREE.DirectionalLight(0xffffff, 2.5);
 sun.castShadow = true; sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.9;
@@ -5292,9 +5299,12 @@ function updateAtmosphere(dt){
   const useSun = el > -0.03, dir = useSun ? _sunDir : _moonDir;
   if (useSun) _c.setRGB(1.0, 0.95, 0.88).lerp(_c2.setRGB(1.0, 0.55, 0.25), golden*0.85); else _c.setRGB(0.55, 0.65, 1.0);
   sun.color.copy(_c);
-  sun.intensity = (useSun ? 3.0*smoothstep(-0.03, 0.12, el) : 0.35*night) * (1 - rainK*0.7);
+  // a world can dim daylight where it does not reach (caves, the deep sea): lightK scales sun and sky light
+  const lightK = active.lightK ?? 1;
+  sun.intensity = (useSun ? 3.0*smoothstep(-0.03, 0.12, el) : 0.35*night) * (1 - rainK*0.7) * lightK;
   hemi.color.setRGB(0.7,0.8,1.0); hemi.groundColor.setRGB(...activeDef.ground);
-  hemi.intensity = lerp(0.35, 1.9, day) * (1 - rainK*0.3) * (1 + S.flash*4);
+  if (active.hemiTint) hemi.color.lerp(active.hemiTint, active.hemiTint.k ?? 1);
+  hemi.intensity = lerp(0.35, 1.9, day) * (1 - rainK*0.3) * (1 + S.flash*4*lightK) * lightK;
   VU.uSunDir.value.copy(dir); VU.uSunCol.value.copy(sun.color).multiplyScalar(sun.intensity);
   VU.uHemiSky.value.copy(hemi.color).multiplyScalar(hemi.intensity); VU.uHemiGround.value.copy(hemi.groundColor).multiplyScalar(hemi.intensity);
 
@@ -5311,7 +5321,7 @@ function updateAtmosphere(dt){
   const stT = activeDef.fog.stormTint; if (stT) _c.lerp(_c2.setRGB(stT[0], stT[1], stT[2], THREE.SRGBColorSpace).multiplyScalar(0.2 + 0.8*day), rainK*0.9);
   if (active.fogTint) _c.lerp(active.fogTint, active.fogTint.k ?? 0);
   scene.fog.color.copy(_c); scene.fog.density = activeDef.fog.density * fogK * (1 + (activeDef.fog.storm ?? 0)*rainK) * (active.fogK ?? 1);
-  renderer.toneMappingExposure = lerp(0.8, 0.72, day) * (1 - rainK*0.1);
+  renderer.toneMappingExposure = lerp(0.8, 0.72, day) * (1 - rainK*0.1) * (active.exposureK ?? 1);
 
   // Clouds, stars, moon, rain
   { CL.uCover.value = clamp(cloudState.cover + rainK*0.5, 0, 1); CL.uBase.value = cloudState.base; CL.uTop.value = cloudState.top + rainK*600;
@@ -5353,6 +5363,9 @@ function updateAtmosphere(dt){
 
   for (const w of waters){ if (w.userData.cheap){ w.material.normalMap.offset.x += dt*0.004; w.material.normalMap.offset.y += dt*0.0025; continue; } const wu = w.material.uniforms; wu.time.value += dt*0.6; wu.sunDirection.value.copy(dir); wu.sunColor.value.copy(sun.color).multiplyScalar(useSun ? smoothstep(-0.03,0.1,el)*(1-rainK*0.8) : 0.25*night); }
 
+  // image-based light: envK fades the baked sky toward a dark shell (re-baked when it changes noticeably)
+  { const ek = clamp(active.envK ?? 1, 0, 1); if (Math.abs(ek - envDim.userData.k) > 0.04 || (ek !== envDim.userData.k && (ek === 0 || ek === 1))){ envDim.userData.k = ek; envDim.material.opacity = 1 - ek; envDim.visible = ek < 1; envDirty = true; }
+    if (active.envTint) envDim.material.color.copy(active.envTint); else envDim.material.color.setRGB(0, 0, 0); }
   envTimer -= dt;
   if (envDirty && envTimer <= 0){ if (envRT) envRT.dispose(); envRT = pmrem.fromScene(envScene, 0, 0.1, 100); scene.environment = envRT.texture; envDirty = false; envTimer = 0.25; }
   return { night, day, time:S.time, rain:rainK, fog:fogK, sunDir:dir, wind:S.wind, temp:SURF.temp };
@@ -5366,7 +5379,12 @@ function hudGroup(id, entries, current, on){
 }
 const cap = s => s[0].toUpperCase()+s.slice(1);
 const startId = BIOMES.some(b=>b.id===location.hash.slice(1)) ? location.hash.slice(1) : BIOMES[0].id;
-hudGroup('g-biome', BIOMES.map(b=>[b.id,b.label]), startId, id => loadBiome(id));
+const biomeSel = document.getElementById('biomeSel');
+BIOMES.forEach((b, i) => { const o = document.createElement('option'); o.value = b.id; o.textContent = `${i < 12 ? (i < 9 ? i + 1 : ['0','−','='][i - 9]) + ' · ' : ''}${b.label}`; biomeSel.appendChild(o); });
+biomeSel.value = startId; biomeSel.onchange = () => { loadBiome(biomeSel.value); biomeSel.blur(); };
+const pickBiome = n => { const b = BIOMES[(n + BIOMES.length) % BIOMES.length]; biomeSel.value = b.id; loadBiome(b.id); };
+{ const W = ['zero','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen','twenty'];
+  document.getElementById('nworlds').textContent = W[BIOMES.length] ?? BIOMES.length; }
 hudGroup('g-tod', Object.keys(TOD).map(k=>[k,cap(k)]), 'dusk', k => S.tSun=[...TOD[k]]);
 hudGroup('g-wx', Object.keys(WX).map(k=>[k,cap(k)]), 'clear', k => S.tWx=[...WX[k]]);
 hudGroup('g-q', Object.keys(QUALITY).map(k=>[k,QUALITY[k].label]), qKey, k => { qKey=k; Q=QUALITY[k]; applyQuality(); loadBiome(activeDef.id); });
@@ -5386,8 +5404,10 @@ document.getElementById('hide').onclick=toggleHud; show.onclick=toggleHud;
 /* ============================== INPUT ============================== */
 addEventListener('keydown', e => { S.keys[e.code]=true; if (e.code==='KeyH') toggleHud();
   if (e.code==='KeyF' && !e.repeat) touchAt(0, 0);
-  const n = e.code==='Minus' ? 10 : /^Digit\d$/.test(e.code) ? (+e.code.slice(5) + 9) % 10 : -1;   // 1-9, 0, minus
-  if (n>=0 && n<BIOMES.length) document.querySelector(`#g-biome [data-k="${BIOMES[n].id}"]`).click(); });
+  if (e.target === biomeSel) return;
+  const n = e.code==='Minus' ? 10 : e.code==='Equal' ? 11 : /^Digit\d$/.test(e.code) ? (+e.code.slice(5) + 9) % 10 : -1;   // 1-9, 0, minus, equals
+  if (n>=0 && n<BIOMES.length) pickBiome(n);
+  if ((e.code==='BracketLeft' || e.code==='BracketRight') && !e.repeat) pickBiome(BIOMES.indexOf(activeDef) + (e.code==='BracketRight' ? 1 : -1)); });
 addEventListener('keyup', e => S.keys[e.code]=false);
 addEventListener('blur', () => S.keys={});
 let drag=null, press=null;
@@ -5444,8 +5464,10 @@ function frame(now, forced){
     if (K.KeyQ||K.KeyC) S.tPos.y -= sp*0.8;
     const bd = activeDef.bounds;
     if (bd){ const dx = S.tPos.x - bd[0], dz = S.tPos.z - bd[1], d = Math.hypot(dx, dz); if (d > bd[2]){ S.tPos.x = bd[0] + dx/d*bd[2]; S.tPos.z = bd[1] + dz/d*bd[2]; } }
-    const floor = Math.max(active.heightAt(S.tPos.x, S.tPos.z), activeDef.floor ?? 0) + 1.8;
-    S.tPos.y = clamp(S.tPos.y, floor, activeDef.ceiling ?? 1400);
+    // layered worlds (boardwalks, upper floors, rooftops, cave levels) give the walk floor and roof for the viewer's height
+    const floor = Math.max(active.floorAt ? active.floorAt(S.tPos.x, S.tPos.z, S.tPos.y) : active.heightAt(S.tPos.x, S.tPos.z), activeDef.floor ?? 0) + 1.8;
+    const roof = active.ceilingAt ? active.ceilingAt(S.tPos.x, S.tPos.z, S.tPos.y) - 0.6 : Infinity;
+    S.tPos.y = clamp(S.tPos.y, floor, Math.max(floor, Math.min(roof, activeDef.ceiling ?? 1400)));
     S.grounded = S.tPos.y < floor + 0.35;
   }
   S.pos.lerp(S.tPos, ease(8,dt));

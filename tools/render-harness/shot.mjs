@@ -2,7 +2,8 @@
 // the engine through window.__helios and saves one JPEG per job.
 //
 //   node shot.mjs <page.html> <outPrefix> '<jobs JSON>' [width] [height]
-//   job: { "biome":"amazon|sea|egypt|arctic|volcano|haven|forest|taiga|savanna|canyon|alpine", "q":"fast|balanced|ultra",
+//   job: { "biome":"amazon|sea|egypt|arctic|volcano|haven|forest|taiga|savanna|canyon|alpine|marsh|underwater|caverns|village|ruins|urban",
+//          "q":"fast|balanced|ultra",
 //          "tod":"dawn|noon|dusk|night", "wx":"clear|rain|fog", "cam":[x, y, z, yaw, pitch], "steps":3,
 //          "opt":["season","autumn"], "strike":[["fire", x, z, radius?], ...], "sim":seconds }
 //   strike hits the surface layer; sim advances weather, surface and wildlife without rendering (after cam/strike).
