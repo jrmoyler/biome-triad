@@ -15,6 +15,8 @@ canvas:active{cursor:grabbing}
 .plate h1{font-family:var(--display);font-weight:600;font-size:clamp(26px,4vw,40px);letter-spacing:.02em;margin:0;line-height:1;text-shadow:0 2px 18px rgba(0,0,0,.5)}
 .plate p{margin:6px 0 0;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
 .plate b{color:var(--sun);font-weight:500}
+#status{margin-top:4px;letter-spacing:.08em;text-transform:none;color:var(--ink);opacity:.82;max-width:min(560px,70vw);line-height:1.5}
+#status:empty{display:none}
 #hud{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:6;display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;justify-content:center;max-width:calc(100vw - 32px);padding:8px 12px;background:var(--glass);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--line);border-radius:14px;transition:opacity .2s,transform .2s}
 #hud.off{opacity:0;pointer-events:none;transform:translate(-50%,12px)}
 .grp{display:flex;align-items:center;gap:2px}
@@ -37,14 +39,16 @@ button[aria-pressed="true"]{background:var(--sun);color:#1a1208}
 </style>
 
 <canvas id="c"></canvas>
-<div class="plate"><h1>Helios Triad</h1><p><b id="bname">Amazon</b> · six procedural worlds</p></div>
-<div class="help">WASD move · E/Q rise/sink · Shift fast<br>Drag to look · Double-click mouse-lock · 1–6 biome · H hide</div>
+<div class="plate"><h1>Helios Triad</h1><p><b id="bname">Amazon</b> · eleven procedural worlds</p><p id="status" aria-live="polite"></p></div>
+<div class="help">WASD move · E/Q rise/sink · Shift fast<br>Drag to look · Double-click mouse-lock · 1–0, − biome · H hide<br>Pick a Touch element, then click the ground (or F) to strike it</div>
 <div id="stick"><div id="knob"></div></div>
 <div id="hud">
   <div class="grp" id="g-biome"><span>Biome</span></div>
   <div class="grp" id="g-tod"><span>Light</span></div>
   <div class="grp" id="g-wx"><span>Sky</span></div>
   <div class="grp" id="g-q"><span>Quality</span></div>
+  <div class="grp" id="g-hand"><span>Touch</span></div>
+  <div class="grp" id="g-opt" hidden></div>
   <span id="meta">— fps</span>
   <button id="hide" aria-label="Hide controls">Hide</button>
 </div>
@@ -68,15 +72,25 @@ addEventListener('error', e => { const m=document.getElementById('veilMsg'); if 
      precip {kind:'snow'|'ash'|'motes'|'none', color, size, fall, sway, base, storm, rainLines, lightning, additive}
      bounds [cx, cz, radius]            soft limit on where the viewer can travel (optional)
      floor, ceiling                     lowest / highest viewer altitude (default 0 / 1400)
-     build(kit) -> { group, heightAt(x,z), update?(dt, env) }
+     climate {temp, lapse, night}       air temperature at sea level (deg C), change per metre, night drop (optional)
+     options [{key, label, values:[[k,label]...], value}]   extra HUD controls; the world gets setOption(key, k)
+     build(kit) -> { group, heightAt(x,z), update?(dt, env), materialAt?(x,z), status?(), setOption?(k,v),
+                     onImpact?(element, point, radius), locomote?(S, fwd, right, dt, keys), precip?, fogK? }
    kit gives: THREE, Q (quality), noise, rng, tex, makeTerrain (with horizon apron), makeWater, terrainMaterial,
    instTiled, forest + defineSpecies, scatter + plant geometry builders, puffField, islandGeo, tubeInto,
-   smoothstep, lerp, srgb. env passed to update() carries night, day, time, rain, fog and sunDir.
+   smoothstep, lerp, srgb, impact (strike the surface layer). env passed to update() carries night, day, time,
+   rain, fog, sunDir, wind [x,z] (m/s) and temp (air temperature at the viewer).
+   Every world runs a Dynamic Surface & Environmental State layer (extensions/surface-state): weather, fire,
+   frost, water and the other elemental impacts leave wetness, snow, ice, scorch, heat and damage on the ground,
+   which terrain, ground cover and trees read back from a texture window around the viewer.
    ========================================================================== */
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { Water } from 'three/addons/objects/Water.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+/* Dynamic Surface & Environmental State layer. Loaded dynamically so the worlds still open from file:// (where browsers
+   refuse local module imports); without it the ground still wets and snows from the weather, but nothing is simulated. */
+const SurfaceLib = await import('./extensions/surface-state/src/index.mjs').catch(e => { console.warn('surface layer unavailable:', e.message); return null; });
 
 const TAU = Math.PI * 2;
 const clamp = (v,a,b) => Math.min(b, Math.max(a, v));
@@ -207,18 +221,37 @@ float tbump(vec2 p, float n3, float f0, float f1, float f2, float rpA, float cpA
   return h;
 }
 `;
+/* ---------- Surface state window: the simulated ground around the viewer as two RGBA textures ----------
+   A: wetness, snow, ice, scorch    B: heat (live fire), damage (lost integrity), growth, coverage.
+   Cell values are premultiplied by coverage, so the shader blends them over the ambient weather field exactly;
+   the ambient field splits into rain-wet or snow by the local air temperature (uSurfClim: sea-level deg C, lapse). */
+const SURF_N = 128;
+const SU = { uSurfA:{ value:null }, uSurfB:{ value:null }, uSurfWin:{ value:new THREE.Vector4(0, 0, 384, 0) },
+  uSurfAmb:{ value:new THREE.Vector4() }, uSurfClim:{ value:new THREE.Vector4(18, -0.0065, 0, 0) } };
+for (const k of ['uSurfA', 'uSurfB']){ const t = new THREE.DataTexture(new Uint8Array(SURF_N*SURF_N*4), SURF_N, SURF_N, THREE.RGBAFormat);
+  t.magFilter = t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; t.needsUpdate = true; t.userData.keep = true; SU[k].value = t; }
+const SURF_GLSL = `
+uniform sampler2D uSurfA, uSurfB; uniform vec4 uSurfWin, uSurfAmb, uSurfClim;
+void surfAt(vec3 wp, out vec4 A, out vec4 B){
+  vec2 uv = (wp.xz - uSurfWin.xy)/uSurfWin.z;
+  float inW = uSurfWin.w*step(0.0, uv.x)*step(uv.x, 1.0)*step(0.0, uv.y)*step(uv.y, 1.0);
+  vec4 a = texture2D(uSurfA, uv)*inW; B = texture2D(uSurfB, uv)*inW;
+  float frz = 1.0 - smoothstep(-0.5, 1.5, uSurfClim.x + uSurfClim.y*wp.y);
+  A = vec4(uSurfAmb.x*(1.0 - frz), uSurfAmb.y*frz, uSurfAmb.z*frz, 0.0)*(1.0 - B.a) + a;
+}
+`;
 function terrainMaterial(d = {}){
   const o = { rock:[0.42,0.38,0.34], rockLo:0.3, bump:14, ripple:0, wet:0.5, foam:0, caustic:0, rows:0, grain:1, snow:0, glow:0, glowCol:[1.0,0.32,0.06], strata:1, ...d };
   const rc = new THREE.Color().setRGB(o.rock[0], o.rock[1], o.rock[2], THREE.SRGBColorSpace);
   const U = { uRock:{ value:new THREE.Vector4(rc.r, rc.g, rc.b, o.rockLo) }, uTD:{ value:new THREE.Vector4(o.bump, o.ripple, o.wet, o.rows) },
     uTE:{ value:new THREE.Vector3(o.foam, o.caustic, o.grain) }, uTF:{ value:new THREE.Vector3(o.snow, o.glow, o.strata) }, uGlowC:{ value:new THREE.Color(...o.glowCol) },
-    uT:WIND, uSunView:VU.uSunView, uSunCol:VU.uSunCol };
+    uT:WIND, uSunView:VU.uSunView, uSunCol:VU.uSunCol, ...SU };
   const m = new THREE.MeshStandardMaterial({ vertexColors:true, map:tex.ground, roughness:0.95, metalness:0 });
   m.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, U);
     sh.vertexShader = 'attribute float kind; varying vec3 vWP; varying vec3 vWN; varying float vKind;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
       vWP = (modelMatrix * vec4(transformed, 1.0)).xyz; vWN = normalize(mat3(modelMatrix) * objectNormal); vKind = kind;`);
-    sh.fragmentShader = 'uniform vec4 uRock, uTD; uniform vec3 uTE, uGlowC, uSunView, uSunCol; uniform vec2 uT; uniform vec3 uTF; varying vec3 vWP; varying vec3 vWN; varying float vKind;\n' + NOISE2D + sh.fragmentShader
+    sh.fragmentShader = 'uniform vec4 uRock, uTD; uniform vec3 uTE, uGlowC, uSunView, uSunCol; uniform vec2 uT; uniform vec3 uTF; varying vec3 vWP; varying vec3 vWN; varying float vKind;\n' + NOISE2D + SURF_GLSL + sh.fragmentShader
       .replace('#include <color_fragment>', `#include <color_fragment>
         vec2 twp = vWP.xz;
         float n3 = tfbm(twp*0.045), n1 = tvn(twp*1.1), n2 = tvn(twp*5.3 + 4.1), n4 = tvn(twp*23.0);
@@ -244,10 +277,20 @@ function terrainMaterial(d = {}){
           float cz = 1.0 - smoothstep(-0.2, -18.0, vWP.y);
           float c1 = 1.0 - abs(2.0*tvn(twp*0.55 + vec2(uT.x*0.11, uT.x*0.07)) - 1.0), c2 = 1.0 - abs(2.0*tvn(twp*0.83 - vec2(uT.x*0.08, uT.x*0.12) + 9.0) - 1.0);
           diffuseColor.rgb *= 1.0 + 1.6*pow(min(c1, c2), 5.0)*cz*step(vWP.y, 0.0)*uTE.y;
-        }`)
+        }
+        // surface state: rain-dark and glossy, fresh snow on the up-facing ground, glaze ice, char and live embers
+        vec4 sA, sB; surfAt(vWP, sA, sB);
+        float sSnow = smoothstep(0.06, 0.5, sA.y + (n2 - 0.5)*0.22)*mix(0.3, 1.0, smoothstep(0.45, 0.85, vWN.y));
+        float sWet = sA.x*(1.0 - sSnow)*step(-0.4, vWP.y), sIce = sA.z*(1.0 - 0.6*sSnow), sScar = smoothstep(0.04, 0.55, sA.w), sHeat = sB.x;
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb*vec3(0.72, 1.18, 0.55), sB.z*0.55*(1.0 - rk));
+        diffuseColor.rgb *= 1.0 - 0.36*sWet;
+        diffuseColor.rgb = mix(diffuseColor.rgb, mix(vec3(0.03, 0.026, 0.024), vec3(0.3, 0.29, 0.28), smoothstep(0.5, 0.8, n2 + 0.3*n4)*0.7), sScar*0.92);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.62, 0.78, 0.86)*(0.85 + 0.2*n1), sIce*0.55);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9, 0.93, 0.97)*(0.93 + 0.07*n2), sSnow);`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         roughnessFactor = mix(roughnessFactor, 0.32, wet*0.85);
-        roughnessFactor = mix(roughnessFactor, 0.3, ice);`)
+        roughnessFactor = mix(roughnessFactor, 0.3, ice);
+        roughnessFactor = mix(roughnessFactor, 0.42, sWet*0.8); roughnessFactor = mix(roughnessFactor, 0.12, sIce); roughnessFactor = mix(roughnessFactor, 0.85, sSnow);`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         if (uTF.y > 0.0 && hot > 0.0){   // cooling lava crust: glowing cracks between dark plates
           vec2 q = twp*0.21 + vec2(tvn(twp*0.03), tvn(twp*0.03 + 7.0))*3.0;
@@ -256,7 +299,8 @@ function terrainMaterial(d = {}){
           float crack = mix(pow(c1, 13.0) + 0.5*pow(c2, 18.0), 0.035, far) * hot * smoothstep(0.3, 0.75, n3 + 0.25);
           totalEmissiveRadiance += uGlowC * crack * (0.7 + 0.3*sin(uT.x*1.1 + n3*14.0)) * uTF.y;
           diffuseColor.rgb *= 1.0 - 0.7*crack;
-        }`)
+        }
+        totalEmissiveRadiance += vec3(1.0, 0.3, 0.05)*sHeat*sHeat*(0.5 + tvn(twp*2.3 + vec2(0.0, uT.x*1.7)))*4.0;`)
       .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
         if (uTF.x > 0.0){   // snow: sparse view-dependent ice-crystal glints
           vec3 Vd = normalize(vViewPosition), cell = floor(vWP*24.0);
@@ -276,11 +320,11 @@ function terrainMaterial(d = {}){
           float a = vWP.y*3.1 + n3*8.0;
           float gy = rk*0.9*3.1*sign(sin(a))*cos(a)*f0;
           vec3 nw = normalize(vWN);
-          nw = normalize(nw - vec3((h1 - h0)/e, gy*0.35, (h2 - h0)/e) * uTD.x*0.012);
+          nw = normalize(nw - vec3((h1 - h0)/e, gy*0.35, (h2 - h0)/e) * uTD.x*0.012*(1.0 - 0.75*sSnow));
           normal = normalize(mat3(viewMatrix) * nw);
         }`);
   };
-  m.customProgramCacheKey = () => 'terrain4';
+  m.customProgramCacheKey = () => 'terrain5';
   return m;
 }
 function makeTerrain({ size, seg, height, color, kind, cx=0, cz=0, repeat, detail, apron }){
@@ -407,20 +451,29 @@ function plantMat({ color=0xffffff, roughness=0.8, wind=0.05, back=1.0, map=null
   const m = new THREE.MeshStandardMaterial({ vertexColors:true, color, roughness, metalness:0, side:rock ? THREE.FrontSide : THREE.DoubleSide, map, alphaTest, envMapIntensity:0.6 });
   m.userData.far = { value:70 };
   m.onBeforeCompile = function(sh){
-    Object.assign(sh.uniforms, { uWind:WIND, uFar:this.userData.far, uSunView:VU.uSunView, uSunCol:VU.uSunCol });
-    sh.vertexShader = 'uniform vec2 uWind; uniform float uFar;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+    Object.assign(sh.uniforms, { uWind:WIND, uFar:this.userData.far, uSunView:VU.uSunView, uSunCol:VU.uSunCol, ...SU });
+    sh.vertexShader = 'uniform vec2 uWind; uniform float uFar; varying vec4 vSurf;\n' + SURF_GLSL + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
       vec3 ipw = (modelMatrix * vec4(instanceMatrix[3].xyz, 1.0)).xyz;
+      vec4 sA, sB; surfAt(ipw, sA, sB);
+      float dmg = max(sB.y, sA.w);   // burnt or trampled: plants flatten, then are gone
+      ${rock ? '' : 'transformed.y *= 1.0 - 0.6*smoothstep(0.08, 0.45, dmg); transformed *= 1.0 - smoothstep(0.4, 0.85, dmg);'}
+      vSurf = vec4(sA.w, sA.y, sB.x, sA.x);
       ${wind ? `float sw = sin(uWind.x*1.3 + ipw.x*0.37 + ipw.z*0.29) + 0.5*sin(uWind.x*3.1 + ipw.z*0.9 + ipw.x*0.6);
       float hh = max(position.y, 0.0);
       transformed.x += sw*${wind.toFixed(3)}*uWind.y*hh*hh; transformed.z += sw*${(wind*0.6).toFixed(3)}*uWind.y*hh*hh;` : ''}
       transformed *= 1.0 - smoothstep(uFar - 14.0, uFar, distance(ipw, cameraPosition));`);
-    sh.fragmentShader = 'uniform vec3 uSunView; uniform vec3 uSunCol;\n' + (rock ? sh.fragmentShader : sh.fragmentShader
+    const surfFrag = f => f.replace('#include <color_fragment>', `#include <color_fragment>
+        diffuseColor.rgb *= (1.0 - 0.9*smoothstep(0.03, 0.4, vSurf.x))*(1.0 - 0.3*vSurf.w);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9, 0.93, 0.97), smoothstep(0.1, 0.6, vSurf.y)*0.75);`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        totalEmissiveRadiance += vec3(1.0, 0.3, 0.05)*vSurf.z*vSurf.z*3.0;`);
+    sh.fragmentShader = 'uniform vec3 uSunView; uniform vec3 uSunCol; varying vec4 vSurf;\n' + surfFrag(rock ? sh.fragmentShader : sh.fragmentShader
       .replace('#include <normal_fragment_begin>', THREE.ShaderChunk.normal_fragment_begin.replace(/normal \*= faceDirection;/g, ''))
       .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
         { vec3 Vd = normalize(vViewPosition); float bs = pow(clamp(dot(-Vd, uSunView), 0.0, 1.0), 4.0);
           reflectedLight.directDiffuse += diffuseColor.rgb * uSunCol * RECIPROCAL_PI * (bs*${(1.1*back).toFixed(2)} + 0.07) * vec3(1.0, 1.05, 0.7); }`));
   };
-  m.customProgramCacheKey = () => 'plant' + wind + back + rock;
+  m.customProgramCacheKey = () => 'plant2' + wind + back + rock;
   return m;
 }
 function scatter({ geo, mat:baseMat, tile=24, radius=70, per=1, seed=1, shadow=false, place }){
@@ -572,7 +625,8 @@ const V3 = (x=0,y=0,z=0) => new THREE.Vector3(x,y,z);
 const VU = {
   uSunDir:{ value:V3(0,1,0) }, uSunView:{ value:V3(0,1,0) }, uSunCol:{ value:new THREE.Color(1,1,1) },
   uHemiSky:{ value:new THREE.Color(0.5,0.6,0.7) }, uHemiGround:{ value:new THREE.Color(0.2,0.2,0.1) },
-  uLod:{ value:150 }, uBand:{ value:10 }, uWind:WIND, uImpGain:{ value:1.0 }
+  uLod:{ value:150 }, uBand:{ value:10 }, uWind:WIND, uImpGain:{ value:1.0 },
+  uSeason:{ value:new THREE.Vector4() }   // x autumn colour, y leaf drop, z spring flush, w snow load (reset per world)
 };
 const IGN = 'float ign(vec2 p){ return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }\n';
 
@@ -800,23 +854,34 @@ function foliageMaterial({ map, leaf, color=0xffffff, roughness=0.7, wind=0.01, 
   const m = new THREE.MeshStandardMaterial({ map, color, vertexColors:true, roughness, metalness:0, envMapIntensity:0.0,
     side: leaf ? THREE.DoubleSide : THREE.FrontSide, alphaTest: leaf ? 0.5 : 0, alphaToCoverage: !!leaf });
   m.onBeforeCompile = sh => {
-    Object.assign(sh.uniforms, { uSunView:VU.uSunView, uSunCol:VU.uSunCol, uLod:VU.uLod, uBand:VU.uBand, uWind:VU.uWind });
-    sh.vertexShader = 'uniform vec2 uWind; uniform float uLod; uniform float uBand; varying float vLodD;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+    Object.assign(sh.uniforms, { uSunView:VU.uSunView, uSunCol:VU.uSunCol, uLod:VU.uLod, uBand:VU.uBand, uWind:VU.uWind, uSeason:VU.uSeason, ...SU });
+    sh.vertexShader = 'uniform vec2 uWind; uniform float uLod; uniform float uBand; varying float vLodD; varying vec4 vFol;\n' + SURF_GLSL + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
       #ifdef USE_INSTANCING
         vec3 ipW = (modelMatrix * vec4(instanceMatrix[3].xyz, 1.0)).xyz;
       #else
         vec3 ipW = (modelMatrix * vec4(0.0,0.0,0.0,1.0)).xyz;
       #endif
       vLodD = distance(ipW, cameraPosition);
+      { vec4 sA, sB; surfAt(ipW, sA, sB);   // x burnt, y heat, z per-tree hash, w snow on up-facing foliage
+        vFol = vec4(smoothstep(0.15, 0.7, max(sA.w, sB.y)), sB.x, fract(sin(dot(ipW.xz, vec2(12.9898, 78.233)))*43758.5453), sA.y*smoothstep(0.1, 0.8, objectNormal.y)); }
       float sw = sin(uWind.x*0.9 + ipW.x*0.051 + ipW.z*0.043) + 0.4*sin(uWind.x*2.3 + ipW.z*0.11 + ipW.x*0.02);
       float hh = max(position.y, 0.0);
       transformed.x += sw * ${wind.toFixed(4)} * uWind.y * hh;
       transformed.z += sw * ${(wind*0.6).toFixed(4)} * uWind.y * hh;
       ${flutter ? `transformed += objectNormal * sin(uWind.x*7.0 + position.x*2.3 + position.z*1.9 + position.y*1.7) * ${flutter.toFixed(3)} * uWind.y;` : ''}
       if (vLodD > uLod + uBand) transformed = vec3(0.0);`);
-    sh.fragmentShader = 'uniform vec3 uSunView; uniform vec3 uSunCol; uniform float uLod; uniform float uBand; varying float vLodD;\n' + IGN + sh.fragmentShader
+    sh.fragmentShader = 'uniform vec3 uSunView; uniform vec3 uSunCol; uniform float uLod; uniform float uBand; uniform vec4 uSeason; varying float vLodD; varying vec4 vFol;\n' + IGN + NOISE2D + sh.fragmentShader
       .replace('void main() {', `void main() {
         if (smoothstep(uLod - uBand, uLod + uBand, vLodD) >= ign(gl_FragCoord.xy)) discard;`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        ${leaf ? `if (uSeason.y > 0.0 || vFol.x > 0.0){ float lh = tvn(vMapUv*26.0 + vFol.z*17.0); if (lh < max(uSeason.y*(0.72 + 0.4*vFol.z), vFol.x*1.1)) discard; }
+        { float L = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)); vec3 aut = vFol.z < 0.45 ? vec3(2.3, 1.05, 0.18) : vFol.z < 0.8 ? vec3(2.4, 0.5, 0.12) : vec3(2.0, 1.6, 0.3);
+          diffuseColor.rgb = mix(diffuseColor.rgb, L*aut, uSeason.x*(0.55 + 0.45*vFol.z));
+          diffuseColor.rgb = mix(diffuseColor.rgb, L*vec3(1.15, 1.9, 0.5), uSeason.z);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9, 0.93, 0.98), clamp(uSeason.w + vFol.w*0.9, 0.0, 1.0)*0.85); }`
+        : `diffuseColor.rgb *= 1.0 - 0.85*vFol.x; diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.88, 0.9, 0.95), vFol.w*0.6);`}`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        totalEmissiveRadiance += vec3(1.0, 0.3, 0.05)*vFol.y*vFol.y*${leaf ? '1.2' : '2.5'};`)
       .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
         ${leaf ? `{ vec3 Vd = normalize(vViewPosition); float bs = pow(clamp(dot(-Vd, uSunView), 0.0, 1.0), 4.0);
           reflectedLight.directDiffuse += diffuseColor.rgb * uSunCol * RECIPROCAL_PI * (bs * 1.25 + 0.1) * vec3(1.0, 1.06, 0.72); }` : ''}`);
@@ -869,9 +934,11 @@ function impostorMaterial(sp){
       #include <fog_pars_vertex>
       #include <logdepthbuf_pars_vertex>
       uniform float uLod, uBand, uS;
-      varying vec2 vUv0, vUv1; varying float vBlend, vFade; varying vec3 vRight, vFwd, vTint;
+      varying vec2 vUv0, vUv1; varying float vBlend, vFade; varying vec3 vRight, vFwd, vTint; varying vec4 vFol;
+      ${SURF_GLSL}
       void main(){
         vec3 ip = (modelMatrix * vec4(instanceMatrix[3].xyz, 1.0)).xyz;
+        { vec4 sA, sB; surfAt(ip, sA, sB); vFol = vec4(smoothstep(0.15, 0.7, max(sA.w, sB.y)), sB.x, fract(sin(dot(ip.xz, vec2(12.9898, 78.233)))*43758.5453), sA.y); }
         float sc = length(instanceMatrix[0].xyz);
         float yaw = atan(-instanceMatrix[0].z, instanceMatrix[0].x);
         vec3 tc = cameraPosition - ip; float d = length(tc);
@@ -901,15 +968,22 @@ function impostorMaterial(sp){
       #include <common>
       #include <fog_pars_fragment>
       #include <logdepthbuf_pars_fragment>
-      uniform sampler2D tAlb, tNrm; uniform vec3 uSunDir, uSunCol, uHemiSky, uHemiGround; uniform float uImpGain;
-      varying vec2 vUv0, vUv1; varying float vBlend, vFade; varying vec3 vRight, vFwd, vTint;
+      uniform sampler2D tAlb, tNrm; uniform vec3 uSunDir, uSunCol, uHemiSky, uHemiGround; uniform float uImpGain; uniform vec4 uSeason;
+      varying vec2 vUv0, vUv1; varying float vBlend, vFade; varying vec3 vRight, vFwd, vTint; varying vec4 vFol;
       ${IGN}
+      ${NOISE2D}
       void main(){
         #include <logdepthbuf_fragment>
         if (vFade < ign(gl_FragCoord.xy)) discard;
         vec4 a = mix(texture2D(tAlb, vUv0), texture2D(tAlb, vUv1), vBlend);
         if (a.a < 0.5) discard;
         vec3 alb = a.rgb * vTint;
+        float leafy = smoothstep(0.0, 0.03, a.g - a.r*0.92);   // seasons and fire act on foliage, not on the bark
+        if (leafy > 0.5 && tvn(vUv0*vec2(${IMP_VIEWS}.0*30.0, 30.0) + vFol.z*9.0) < max(uSeason.y*(0.72 + 0.4*vFol.z), vFol.x*1.1)) discard;
+        { float L = dot(alb, vec3(0.3, 0.59, 0.11)); vec3 aut = vFol.z < 0.45 ? vec3(2.3, 1.05, 0.18) : vFol.z < 0.8 ? vec3(2.4, 0.5, 0.12) : vec3(2.0, 1.6, 0.3);
+          alb = mix(alb, mix(mix(alb, L*aut, uSeason.x*(0.55 + 0.45*vFol.z)), L*vec3(1.15, 1.9, 0.5), uSeason.z), leafy);
+          alb = mix(alb, vec3(0.9, 0.93, 0.98), clamp(uSeason.w + vFol.w*0.9, 0.0, 1.0)*0.8*leafy);
+          alb *= 1.0 - 0.85*vFol.x*(1.0 - leafy); }
         vec3 nv = normalize(mix(texture2D(tNrm, vUv0).xyz, texture2D(tNrm, vUv1).xyz, vBlend) * 2.0 - 1.0);
         vec3 N = normalize(vRight*nv.x + vec3(0.0,1.0,0.0)*nv.y + vFwd*nv.z);
         float ndl = max(dot(N, uSunDir), 0.0);
@@ -922,7 +996,7 @@ function impostorMaterial(sp){
         #include <fog_fragment>
       }`
   });
-  Object.assign(m.uniforms, { uSunDir:VU.uSunDir, uSunCol:VU.uSunCol, uHemiSky:VU.uHemiSky, uHemiGround:VU.uHemiGround, uLod:VU.uLod, uBand:VU.uBand, uImpGain:VU.uImpGain });
+  Object.assign(m.uniforms, { uSunDir:VU.uSunDir, uSunCol:VU.uSunCol, uHemiSky:VU.uHemiSky, uHemiGround:VU.uHemiGround, uLod:VU.uLod, uBand:VU.uBand, uImpGain:VU.uImpGain, uSeason:VU.uSeason, ...SU });
   m.uniforms.tAlb.value = sp.imp.alb; m.uniforms.tNrm.value = sp.imp.nrm;
   m.userData.keep = true;
   return m;
@@ -1529,6 +1603,142 @@ function islandGeo({ x:ox, z:oz, rim, top, depth, seed=1, rings=34, under=26, se
   return g;
 }
 
+/* =====================================================================
+   SURFACE STATE — every world runs one Dynamic Surface & Environmental State layer. The engine feeds it the
+   weather each frame, strikes it from the Touch tools, mirrors the cells around the viewer into SU's texture
+   window (read by terrain, ground cover and trees) and shows live fire as flames, smoke and firelight.
+   ===================================================================== */
+const SURF = { layer:null, cs:3, timer:0, amb:{ wet:0, snow:0, ice:0 }, burning:[], stats:{ burning:0, scorched:0, cells:0 }, temp:18 };
+const climateAt = (def, y, night, rain) => { const c = def.climate || {}; return (c.temp ?? 18) - (c.night ?? 4)*night - 3*rain + (active?.tempOffset ?? 0) + (c.lapse ?? -0.0065)*y; };
+/* Flames: vertical billboards rising from burning cells, shaped by scrolling noise; additive HDR so they bloom */
+const fireFX = (() => {
+  const N = 900, g = new THREE.InstancedBufferGeometry().copy(new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0)), F = new Float32Array(N*4);
+  g.setAttribute('aF', new THREE.InstancedBufferAttribute(F, 4)); g.instanceCount = 0;
+  const m = new THREE.ShaderMaterial({ transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, fog:false, uniforms:{ uT:WIND },
+    vertexShader:`
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      attribute vec4 aF; uniform vec2 uT; varying vec2 vUv; varying float vK, vS;
+      void main(){
+        vec3 c = aF.xyz; float k = fract(aF.w), sd = floor(aF.w)/997.0;
+        vec3 f = cameraPosition - c; f.y = 0.0; f = normalize(f + vec3(1e-4, 0.0, 0.0));
+        vec3 rgt = normalize(cross(vec3(0.0, 1.0, 0.0), f));
+        float h = (0.9 + 3.2*k)*(0.8 + 0.3*sin(uT.x*7.0 + sd*40.0)), w = 0.8 + 1.4*k;
+        vec3 wp = c + rgt*position.x*w + vec3(0.0, position.y*h, 0.0) + vec3(sin(uT.x*3.0 + sd*20.0), 0.0, cos(uT.x*2.6 + sd*13.0))*position.y*0.3;
+        vUv = uv; vK = k; vS = sd;
+        gl_Position = projectionMatrix*viewMatrix*vec4(wp, 1.0);
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader:`
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      uniform vec2 uT; varying vec2 vUv; varying float vK, vS;
+      ${NOISE2D}
+      void main(){
+        #include <logdepthbuf_fragment>
+        float n = tfbm(vec2(vUv.x*3.0 + vS*31.0, vUv.y*2.2 - uT.x*2.6));
+        float body = abs(vUv.x - 0.5)*2.0*(0.9 + vUv.y*1.3) + vUv.y*0.8 - n*0.75;
+        float a = smoothstep(0.75, 0.15, body)*smoothstep(0.0, 0.1, vUv.y);
+        if (a < 0.01) discard;
+        vec3 col = mix(vec3(1.0, 0.16, 0.02), vec3(1.0, 0.72, 0.28), smoothstep(0.3, 0.95, a)*(1.0 - vUv.y*0.6));
+        gl_FragColor = vec4(col*a*(1.4 + 1.8*vK), 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }` });
+  const mesh = new THREE.Mesh(g, m); mesh.frustumCulled = false; mesh.renderOrder = 6; scene.add(mesh);
+  const smoke = puffField({ count:260, seed:61, life:16, rise:70, spread:14, size:[4, 26], drift:[0, 0, 0], opacity:0.5, colA:[0.2,0.19,0.18], colB:[0.55,0.54,0.52], glow:[0.7,0.22,0.05], order:5, emit:() => [0, -1e5, 0] });
+  smoke.visible = false; scene.add(smoke);
+  const light = new THREE.PointLight(0xff7a2a, 0, 120, 2); scene.add(light);
+  const hashF = (x, z) => { const v = Math.sin(x*12.9898 + z*78.233)*43758.5453; return v - Math.floor(v); };
+  return {
+    refresh(cells){
+      const cs = SURF.cs, base = smoke.geometry.attributes.aBase, sm = smoke.material.uniforms; let n = 0, lx = 0, ly = 0, lz = 0, lw = 0;
+      cells.sort((a, b) => Math.hypot(a.x - S.pos.x, a.z - S.pos.z) - Math.hypot(b.x - S.pos.x, b.z - S.pos.z));
+      for (const c of cells){ const k = clamp(c.burn*(0.4 + c.flammability), 0, 0.999), per = c.flammability > 0.3 ? 3 : 1;
+        for (let q=0;q<per && n<900;q++){ const h1 = hashF(c.x + q*1.7, c.z), h2 = hashF(c.z - q*2.3, c.x + 5), x = c.x + (h1 - 0.5)*cs*0.9, z = c.z + (h2 - 0.5)*cs*0.9;
+          F[n*4] = x; F[n*4+1] = active.heightAt(x, z) - 0.2; F[n*4+2] = z; F[n*4+3] = Math.floor(h1*996) + k*(0.7 + 0.3*h2); n++; }
+        const d = Math.hypot(c.x - S.pos.x, c.z - S.pos.z), w = k/(1 + d*d*0.002); lx += c.x*w; lz += c.z*w; lw += w; }
+      g.instanceCount = n; g.attributes.aF.needsUpdate = true;
+      smoke.visible = cells.length > 0;
+      if (cells.length){ const nb = base.count; for (let i=0;i<nb;i++){ const c = cells[i % Math.min(cells.length, 90)]; base.setXYZ(i, c.x + (hashF(i, 3) - 0.5)*cs, active.heightAt(c.x, c.z) + 1, c.z + (hashF(i, 7) - 0.5)*cs); } base.needsUpdate = true;
+        sm.uOpacity.value = 0.25 + 0.35*Math.min(1, cells.length/40); }
+      if (lw > 0){ lx /= lw; lz /= lw; light.position.set(lx, active.heightAt(lx, lz) + 6, lz); }
+      light.userData.k = Math.min(1, lw*3);
+    },
+    frame(env){ smoke.userData.tick(env.time); light.intensity = (light.userData.k || 0)*(900 + 500*Math.sin(env.time*9)*Math.sin(env.time*5.3))*(0.35 + 0.65*env.night);
+      smoke.material.uniforms.uDrift.value.set(env.wind[0]*0.6, 0, env.wind[1]*0.6); },
+    clear(){ g.instanceCount = 0; smoke.visible = false; light.intensity = 0; light.userData.k = 0; }
+  };
+})();
+/* Touch feedback: an expanding glow where the ground was struck, and a forked bolt for storm strikes */
+const strikeFX = (() => {
+  const pulses = [...Array(6)].map(() => { const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex.glow, blending:THREE.AdditiveBlending, transparent:true, depthWrite:false, opacity:0, fog:false })); sp.visible = false; scene.add(sp); return { sp, t:1, r:1 }; });
+  const bg = new THREE.BufferGeometry(); bg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(64*6), 3));
+  const bolt = new THREE.LineSegments(bg, new THREE.LineBasicMaterial({ color:0xe6efff, transparent:true, opacity:0, fog:false, blending:THREE.AdditiveBlending })); bolt.frustumCulled = false; scene.add(bolt);
+  let pi = 0, bt = 1;
+  return {
+    pulse(p, color, r){ const q = pulses[pi++ % pulses.length]; q.sp.position.copy(p).y += 0.6; q.sp.material.color.set(color); q.t = 0; q.r = r; q.sp.visible = true; },
+    bolt(p){ const a = bg.attributes.position.array; let x = p.x + (Math.random() - 0.5)*60, y = p.y + 420, z = p.z + (Math.random() - 0.5)*60, k = 0;
+      for (let i=0;i<32;i++){ const t = (i + 1)/32, nx = lerp(x, p.x, 1/(32 - i)) + (i < 31 ? (Math.random() - 0.5)*14*(1 - t) : 0), ny = lerp(y, p.y, 1/(32 - i)), nz = lerp(z, p.z, 1/(32 - i)) + (i < 31 ? (Math.random() - 0.5)*14*(1 - t) : 0);
+        a.set([x, y, z, nx, ny, nz], k); k += 6; x = nx; y = ny; z = nz; }
+      bg.setDrawRange(0, 64); bg.attributes.position.needsUpdate = true; bt = 0; },
+    frame(dt){ for (const q of pulses){ if (!q.sp.visible) continue; q.t += dt*1.6; q.sp.scale.setScalar(q.r*(1 + 3*q.t)); q.sp.material.opacity = Math.max(0, 1 - q.t)*0.9; if (q.t >= 1) q.sp.visible = false; }
+      bt += dt; bolt.material.opacity = bt < 0.25 ? (0.6 + 0.4*Math.sin(bt*90)) : 0; }
+  };
+})();
+const ELEMENTS_FX = { fire:[0xff7a2a, 3], frost:[0x9fdcff, 6], water:[0x5ab0ff, 6], storm:[0xcfe3ff, 3], nature:[0x8cff6a, 7], force:[0xffe0b0, 5] };
+function strike(el, p, radius = ELEMENTS_FX[el]?.[1] ?? 4, intensity = 1){
+  SURF.layer?.impact({ element:el, position:[p.x, p.y, p.z], radius, intensity });
+  if (el === 'storm'){ S.flash = Math.max(S.flash, 0.9); strikeFX.bolt(p); }
+  strikeFX.pulse(p, ELEMENTS_FX[el]?.[0] ?? 0xffffff, radius);
+  active.onImpact?.(el, p, radius, intensity);
+}
+kit.impact = (el, x, z, radius, intensity) => strike(el, V3(x, active.heightAt(x, z), z), radius, intensity);
+function surfaceInit(def, world){
+  SURF.layer = null; const a0 = def.surface?.amb || {}; SURF.amb.wet = a0.wet ?? 0; SURF.amb.snow = a0.snow ?? 0; SURF.amb.ice = 0; SURF.timer = 0;
+  SU.uSurfWin.value.w = 0; fireFX.clear(); SURF.burning.length = 0; SURF.stats = { burning:0, scorched:0, cells:0 };
+  for (const k of ['uSurfA', 'uSurfB']){ SU[k].value.image.data.fill(0); SU[k].value.needsUpdate = true; }
+  if (!SurfaceLib) return;
+  const cs = def.surface?.cellSize ?? 3; SURF.cs = cs; SU.uSurfWin.value.z = cs*SURF_N;
+  SURF.layer = SurfaceLib.createBiomeSurfaceLayer(def.id, { cellSize:cs, tickRate:10, maxCells:9000, seed:7919 + def.id.length*31, spreadRate:def.surface?.spread ?? 1,
+    materialAt:world.materialAt ? (x, z) => world.materialAt(x, z) : null, weather:{ temperature:climateAt(def, S.pos.y, 0, 0), humidity:def.surface?.humidity ?? 0.5 } });
+}
+function surfaceFrame(dt, env){
+  const def = activeDef, c = def.climate || {}, rk = env.rain, a = SURF.amb;
+  const t0 = climateAt(def, 0, env.night, rk); SURF.temp = env.temp = t0 + (c.lapse ?? -0.0065)*S.pos.y;
+  SU.uSurfClim.value.set(t0, c.lapse ?? -0.0065, 0, 0);
+  // ambient field: rain soaks the ground or settles as snow where the air is freezing; both fade once the sky clears
+  a.wet = clamp(a.wet + (rk*0.09 - (1 - rk)*0.012)*dt, 0, 1);
+  a.snow = clamp(a.snow + (rk*0.035 - (1 - rk)*(t0 > 2 ? 0.01 : 0.0006))*dt, 0, 1);
+  SU.uSurfAmb.value.set(a.wet, a.snow, a.ice, 0);
+  fireFX.frame(env); strikeFX.frame(dt);
+  const L = SURF.layer; if (!L) return;
+  L.update(dt, { rain:rk, humidity:clamp((def.surface?.humidity ?? 0.5) + 0.5*rk + 0.15*smoothstep(1.2, 4, env.fog), 0, 1), temperature:SURF.temp, wind:env.wind, light:env.day });
+  if ((SURF.timer -= dt) > 0) return; SURF.timer = 0.12;
+  const cs = SURF.cs, ox = Math.floor(S.pos.x/cs - SURF_N/2)*cs, oz = Math.floor(S.pos.z/cs - SURF_N/2)*cs;
+  SU.uSurfWin.value.set(ox, oz, cs*SURF_N, 1);
+  const A = SU.uSurfA.value.image.data, B = SU.uSurfB.value.image.data, burning = SURF.burning; A.fill(0); B.fill(0); burning.length = 0; let scorched = 0;
+  for (const q of L.surface.cells.values()){
+    if (q.burn > 0.12 && (q.flammability > 0.01 || q.burn > 0.3)) burning.push(q);
+    if (q.scorch > 0.2) scorched++;
+    const i = Math.floor((q.x - ox)/cs), j = Math.floor((q.z - oz)/cs); if (i < 0 || j < 0 || i >= SURF_N || j >= SURF_N) continue;
+    const o = (j*SURF_N + i)*4;
+    A[o] = q.wetness*255; A[o+1] = q.snow*255; A[o+2] = q.ice*255; A[o+3] = q.scorch*255;
+    B[o] = clamp(q.burn*(0.35 + q.flammability), 0, 1)*255; B[o+1] = (1 - q.integrity)*255; B[o+2] = clamp((q.growth - (q.material === 'vegetation' ? 0.5 : 0))*2, 0, 1)*255; B[o+3] = 255;
+  }
+  SU.uSurfA.value.needsUpdate = SU.uSurfB.value.needsUpdate = true;
+  SURF.stats = { burning:burning.length, scorched, cells:L.surface.cells.size };
+  fireFX.refresh(burning);
+  for (const e of L.surface.drain()) active.onSurfaceEvent?.(e);
+}
+function surfaceStatus(){
+  const st = SURF.stats, out = [];
+  if (st.burning) out.push(`Fire: ${Math.round(st.burning*SURF.cs*SURF.cs)} m² burning`);
+  else if (st.scorched > 3) out.push(`${Math.round(st.scorched*SURF.cs*SURF.cs)} m² scorched`);
+  if (Math.abs(SURF.temp) < 80) out.push(`${Math.round(SURF.temp)} °C`);
+  return out.join(' · ');
+}
+
 /* ---------- Biome registry ---------- */
 const BIOMES = [];
 const Helios = { registerBiome(def){ BIOMES.push(def); return def; }, kit, scene, camera, renderer };
@@ -1536,7 +1746,7 @@ window.Helios = Helios;
 
 /* ============================== AMAZON ============================== */
 Helios.registerBiome({
-  id:'amazon', label:'Amazon', bounds:[0,-250,820],
+  id:'amazon', label:'Amazon', bounds:[0,-250,820], climate:{ temp:27, night:3 }, surface:{ humidity:0.9 },
   clouds:{ cover:0.64, base:1400, top:3700, cirrus:0.15 },
   sky:{ turbidity:5.5, rayleigh:2.0, mie:0.006, mieG:0.85 },
   fog:{ density:0.0019, tint:[0.94,1.0,0.9] },
@@ -1666,7 +1876,7 @@ Helios.registerBiome({
     for (let i=0;i<14;i++){ const pr = i>>1; macD.push({ z:-250 + (R()-0.5)*1000, lane:(R()-0.5)*0.5, sp:(7+R()*3)*(pr%2 ? -1 : 1), off:(i&1)*3.2, h:16+R()*14, ph:R()*10 }); macM.setColorAt(i, (i&2) ? new THREE.Color(1.7,0.18,0.1) : new THREE.Color(0.15,0.4,1.7)); }
     macM.frustumCulled = false; group.add(macM);
 
-    return { group, heightAt, update(dt, env){
+    return { group, heightAt, materialAt:(x,z) => heightAt(x,z) < 0.2 ? 'water' : Math.abs(x-rx(z)) < rw(z)*1.3 ? 'soil' : 'organic', update(dt, env){
       mist.forEach((m,i) => { m.material.map.offset.x += dt*0.0015*(i+1); m.material.color.copy(scene.fog.color); });
       ff.material.opacity = env.night * (0.6 + 0.4*Math.sin(env.time*3.1));
       shaftMat.uniforms.uInt.value = 0.2 * smoothstep(0.04, 0.3, S.sun[1]) * (1 - S.wx[1]) * (1 - smoothstep(1.2, 3.5, S.wx[0])) * (1 - smoothstep(24, 44, S.pos.y - heightAt(S.pos.x, S.pos.z)));
@@ -1679,7 +1889,7 @@ Helios.registerBiome({
 
 /* ============================== SEA ============================== */
 Helios.registerBiome({
-  id:'sea', label:'Sea', bounds:[-150,-900,1900],
+  id:'sea', label:'Sea', bounds:[-150,-900,1900], climate:{ temp:27, night:3 }, surface:{ humidity:0.75 },
   clouds:{ cover:0.44, base:1200, top:2700, cirrus:0.3 },
   sky:{ turbidity:3.5, rayleigh:1.6, mie:0.004, mieG:0.8 },
   fog:{ density:0.00042, tint:[0.9,0.96,1.05] },
@@ -1756,7 +1966,7 @@ Helios.registerBiome({
     fishM.frustumCulled = false; group.add(fishM);
 
     const boats = [0,1,2].map(i => { const b=flora.boat(0xffffff, 0xe8e2d8); b.scale.setScalar(1.3); b.position.set(-120+i*170, 0, -320-i*260); b.rotation.y=0.6+i; group.add(b); return b; });
-    return { group, heightAt, update(dt, env){
+    return { group, heightAt, materialAt:(x,z) => { const y = heightAt(x,z); return y < 0 ? 'water' : y < 3.2 ? 'sand' : y > 60 ? 'stone' : 'vegetation'; }, update(dt, env){
       boats.forEach((b,i) => { b.translateZ(dt*(2.5+i)); b.position.y = 0.25*Math.sin(env.time*1.3+i); b.rotation.z = 0.06*Math.sin(env.time*0.9+i*2); b.rotation.x = 0.04*Math.sin(env.time*1.1+i); });
       gullD.forEach((g,i) => { const th = g.a + g.w*env.time, x = g.cx + Math.cos(th)*g.rad, z = g.cz + Math.sin(th)*g.rad, y = g.h + 4*Math.sin(env.time*0.4 + g.ph);
         dm.position.set(x, y, z); dm.rotation.set(0, -th + (g.w>0 ? 0 : Math.PI), (g.w>0?-1:1)*0.35); dm.scale.setScalar(1.6); dm.updateMatrix(); gullM.setMatrixAt(i, dm.matrix); });
@@ -1770,7 +1980,7 @@ Helios.registerBiome({
 
 /* ============================== EGYPT ============================== */
 Helios.registerBiome({
-  id:'egypt', label:'Egypt', bounds:[-150,-500,1550],
+  id:'egypt', label:'Egypt', bounds:[-150,-500,1550], climate:{ temp:31, night:11 }, surface:{ humidity:0.15 },
   clouds:{ cover:0.2, base:2400, top:3300, cirrus:0.6 },
   sky:{ turbidity:10, rayleigh:1.3, mie:0.006, mieG:0.86 },
   fog:{ density:0.00062, tint:[1.08,0.96,0.82] },
@@ -1926,7 +2136,7 @@ Helios.registerBiome({
     sc.forEach(o => group.add(o.group));
 
     const boats=[]; for (let i=0;i<9;i++){ const b=flora.boat(); b.userData={ z:-1300+R()*1500, lane:(R()-0.5)*1.1, sp:(R()<0.5?-1:1)*(2.2+R()*2.5) }; group.add(b); boats.push(b); }
-    return { group, heightAt, update(dt, env){
+    return { group, heightAt, materialAt:(x,z) => { const y = heightAt(x,z); return y < 0.6 ? 'water' : blocked(x,z) ? 'stone' : isField(x,y,z) ? 'vegetation' : 'sand'; }, update(dt, env){
       for (const b of boats){ const u=b.userData; u.z += u.sp*dt; if (u.z>350) u.z=-1500; if (u.z<-1500) u.z=350;
         const z=u.z, x=cx(z)+u.lane*nw(z)*0.6, dx=0.12+35*0.0035*Math.cos(z*0.0035), sg=Math.sign(u.sp);
         b.position.set(x, 0.1*Math.sin(env.time+u.lane*9), z); b.rotation.y = Math.atan2(dx*sg, sg); b.rotation.z = 0.03*Math.sin(env.time*0.8+u.lane*5); }
@@ -2060,7 +2270,7 @@ function auroraMesh(){
 }
 
 Helios.registerBiome({
-  id:'arctic', label:'Arctic', bounds:[0,-1100,2050],
+  id:'arctic', label:'Arctic', bounds:[0,-1100,2050], climate:{ temp:-9, night:5 }, surface:{ humidity:0.6, amb:{ snow:0.2 } },
   clouds:{ cover:0.5, base:900, top:2300, cirrus:0.5 },
   sky:{ turbidity:2.4, rayleigh:2.6, mie:0.003, mieG:0.78 },
   fog:{ density:0.00075, tint:[0.9,0.98,1.12] },
@@ -2178,7 +2388,7 @@ Helios.registerBiome({
     birdM.frustumCulled = false; group.add(birdM);
     const aurora = auroraMesh(); group.add(aurora);
 
-    return { group, heightAt, update(dt, env){
+    return { group, heightAt, materialAt:(x,z) => { const y = heightAt(x,z); return y < 0 ? 'water' : glacierAt(x,z).m > 0.4 ? 'ice' : y > 4 && slopeY(x,z) < 0.75 ? 'stone' : 'snow'; }, update(dt, env){
       smoke.userData.tick(env.time);
       aurora.position.copy(S.pos); aurora.material.uniforms.uInt.value = smoothstep(0.2, 0.9, env.night) * (1 - env.rain) * 0.75;
       lamp.material.opacity = 0.25 + 0.75*env.night*(0.9 + 0.1*Math.sin(env.time*7));
@@ -2246,7 +2456,7 @@ function snagGeo(seed){
 }
 
 Helios.registerBiome({
-  id:'volcano', label:'Volcanic', bounds:[0,-900,1650],
+  id:'volcano', label:'Volcanic', bounds:[0,-900,1650], climate:{ temp:24, night:5 }, surface:{ humidity:0.3 },
   clouds:{ cover:0.66, base:1900, top:3800, cirrus:0.05, dark:0.5 },
   sky:{ turbidity:16, rayleigh:0.7, mie:0.025, mieG:0.88 },
   fog:{ density:0.00045, tint:[1.2,0.82,0.68] },
@@ -2350,7 +2560,7 @@ Helios.registerBiome({
       D.forEach((b, i) => { b.vy -= 9.8*dt; b.x += b.vx*dt; b.y += b.vy*dt; b.z += b.vz*dt; if (b.y < heightAt(b.x, b.z) - 2) launch(b, big); a[i*3] = b.x; a[i*3+1] = b.y; a[i*3+2] = b.z; });
       pts.geometry.attributes.position.needsUpdate = true; };
 
-    return { group, heightAt, update(dt, env){
+    return { group, heightAt, materialAt:(x,z) => flowAmt(x,z) > 0.3 || ventD(x,z) < 22 ? 'basalt' : heightAt(x,z) > 140 ? 'ash' : 'basalt', update(dt, env){
       plume.userData.tick(env.time); steam.userData.tick(env.time);
       const z = clamp(S.pos.z, ZV, 2600); glow.position.set(lx(z), lavaY(z) + 7, z);
       glow.intensity = 2600*(0.85 + 0.15*Math.sin(env.time*2.3)) * (0.5 + 0.5*smoothstep(-0.2, 0.3, 1 - env.day));
@@ -2437,7 +2647,7 @@ function flowerGeo(seed, petal, centre){
 }
 
 Helios.registerBiome({
-  id:'haven', label:'Haven', bounds:[0,-300,1300], floor:-280, ceiling:1600,
+  id:'haven', label:'Haven', bounds:[0,-300,1300], floor:-280, ceiling:1600, climate:{ temp:17, lapse:0, night:4 }, surface:{ humidity:0.5 },
   clouds:{ cover:0.8, base:-950, top:-330, cirrus:0.55 },
   sky:{ turbidity:2.2, rayleigh:1.1, mie:0.003, mieG:0.84 },
   fog:{ density:0.00026, tint:[1.12,1.02,0.9] },
@@ -2631,7 +2841,7 @@ Helios.registerBiome({
     doveM.frustumCulled = false; group.add(doveM);
     const lamps = group.userData.lamps;
 
-    return { group, heightAt, update(dt, env){
+    return { group, heightAt, materialAt:(x,z) => { const I = onIsland(x,z); return !I ? 'stone' : I === M0 && Math.hypot(x - M0.x, z - M0.z) < M0.plaza + 4 ? 'marble' : 'vegetation'; }, update(dt, env){
       abyss.position.copy(S.pos); abyss.material.uniforms.uHor.value.copy(scene.fog.color);
       abyss.material.uniforms.uDeep.value.setRGB(0.07, 0.16, 0.34).multiplyScalar(0.25 + 0.75*env.day).lerp(scene.fog.color, 0.25);
       halo.rotation.y += dt*0.05; h2.rotation.z -= dt*0.12; h1.position.y = Math.sin(env.time*0.4)*1.2;
@@ -2651,7 +2861,8 @@ Helios.registerBiome({
 const TOD = { dawn:[-0.9,0.07], noon:[0.25,1.05], dusk:[0.1,0.09], night:[-0.5,-0.3] };
 const WX = { clear:[1,0], rain:[2.0,1], fog:[4.8,0] };
 const S = { yaw:0, pitch:0, tYaw:0, tPitch:0, pos:new THREE.Vector3(), tPos:new THREE.Vector3(),
-  sun:[...TOD.dusk], tSun:[...TOD.dusk], wx:[1,0], tWx:[1,0], keys:{}, stick:[0,0], time:0, flash:0, nextFlash:4 };
+  sun:[...TOD.dusk], tSun:[...TOD.dusk], wx:[1,0], tWx:[1,0], keys:{}, stick:[0,0], time:0, flash:0, nextFlash:4,
+  windA:0.6, wind:[2, 1], grounded:false, hand:'look' };
 let active = null, activeDef = null, envDirty = true, envTimer = 0;
 
 function disposeTree(o){
@@ -2682,17 +2893,23 @@ function loadBiome(id){
     if (active){ scene.remove(active.group); disposeTree(active.group); active.dispose?.(); }
     OWNED.splice(0).forEach(g => g.dispose()); SCATTERS.length = 0;
     waters.length = 0;
+    VU.uSeason.value.set(0, 0, 0, 0);
     activeDef = def; active = def.build(kit); scene.add(active.group);
     Object.assign(cloudState, CLOUD_DEFAULT, def.clouds);   // a sky deck sweeping through the camera on load looks wrong
     lodTiles.length = 0; active.group.traverse(o => { if (o.userData.lodTile) lodTiles.push(o); }); VU.uLod.value = Q.lod;
     document.getElementById('bname').textContent = def.label;
     setCameraPreset(def, true); envDirty = true;
+    surfaceInit(def, active); biomeOptions(def);
     veil.classList.add('gone');
   };
   if (window.__HEADLESS) run(); else requestAnimationFrame(() => requestAnimationFrame(run));
 }
 /* Headless verification hooks (used only by the local render harness) */
 window.__helios = { load: id => loadBiome(id), S, TOD, WX, setQuality: k => { qKey=k; Q=QUALITY[k]; applyQuality(); },
+  // advance the world (weather, surface layer, wildlife) by `sec` seconds without rendering
+  sim(sec, dt=0.1){ for (let t=0;t<sec;t+=dt){ S.time += dt; const env = updateAtmosphere(dt); active.update?.(dt, env); surfaceFrame(dt, env); } },
+  strike(el, x, z, r, k){ kit.impact(el, x, z, r, k); }, option(key, v){ document.querySelector(`#g-opt [data-k="${v}"]`)?.click(); },
+  status(){ return statusEl.textContent; },
   snap(steps=3){ for (let i=0;i<steps;i++){ last -= 1000/30; frame(last + 1000/30, true); } return canvas.toDataURL('image/jpeg', 0.92); },
   stats(){ return renderer.info.render; } };
 
@@ -2730,7 +2947,9 @@ function updateAtmosphere(dt){
   _c.copy(FOG_DAY).lerp(FOG_GOLD, golden*day).lerp(FOG_NIGHT, night);
   const t = activeDef.fog.tint; _c.r*=t[0]; _c.g*=t[1]; _c.b*=t[2];
   _c.lerp(_c2.copy(FOG_RAIN).multiplyScalar(0.25+0.75*day), rainK*0.8);
-  scene.fog.color.copy(_c); scene.fog.density = activeDef.fog.density * fogK;
+  const stT = activeDef.fog.stormTint; if (stT) _c.lerp(_c2.setRGB(stT[0], stT[1], stT[2], THREE.SRGBColorSpace).multiplyScalar(0.2 + 0.8*day), rainK*0.9);
+  if (active.fogTint) _c.lerp(active.fogTint, active.fogTint.k ?? 0);
+  scene.fog.color.copy(_c); scene.fog.density = activeDef.fog.density * fogK * (1 + (activeDef.fog.storm ?? 0)*rainK) * (active.fogK ?? 1);
   renderer.toneMappingExposure = lerp(0.8, 0.72, day) * (1 - rainK*0.1);
 
   // Clouds, stars, moon, rain
@@ -2744,7 +2963,7 @@ function updateAtmosphere(dt){
     clouds.position.copy(S.pos); }
   stars.material.opacity = night * (1 - rainK) * (1 - Math.min(1, (fogK-1)/3)); stars.position.copy(S.pos);
   moon.position.copy(S.pos).addScaledVector(_moonDir, 8000); moon.material.opacity = night*(1-rainK)*0.9;
-  const pc = activeDef.precip || {};
+  const pc = active.precip || activeDef.precip || {};
   rain.material.opacity = rainK * 0.55; rain.visible = rainK > 0.02 && pc.rainLines !== false && pc.kind !== 'none';
   { const amt = pc.kind && pc.kind !== 'none' ? clamp((pc.base ?? 0.2) + rainK*(pc.storm ?? 1), 0, 1) : 0;
     flakes.visible = amt > 0.01;
@@ -2766,13 +2985,16 @@ function updateAtmosphere(dt){
   }
   if (rainK > 0.5 && pc.lightning !== false && (S.nextFlash -= dt) < 0){ S.flash = 1; S.nextFlash = 4 + Math.random()*9; }
   S.flash = Math.max(0, S.flash - dt*5);
-  WIND.value.set(S.time, 1 + rainK*2.5);
+  WIND.value.set(S.time, (1 + rainK*2.5)*(active.windK ?? 1));
+  // prevailing wind: a slowly veering direction, gusting, much stronger in storms (m/s; drives fire spread, dust, drift)
+  S.windA += dt*0.02*Math.sin(S.time*0.031); const ws = (activeDef.windy ?? 1)*(active.windK ?? 1)*(2.5 + 2.5*Math.sin(S.time*0.13)**2 + rainK*11);
+  S.wind[0] = Math.cos(S.windA)*ws; S.wind[1] = Math.sin(S.windA)*ws;
 
   for (const w of waters){ if (w.userData.cheap){ w.material.normalMap.offset.x += dt*0.004; w.material.normalMap.offset.y += dt*0.0025; continue; } const wu = w.material.uniforms; wu.time.value += dt*0.6; wu.sunDirection.value.copy(dir); wu.sunColor.value.copy(sun.color).multiplyScalar(useSun ? smoothstep(-0.03,0.1,el)*(1-rainK*0.8) : 0.25*night); }
 
   envTimer -= dt;
   if (envDirty && envTimer <= 0){ if (envRT) envRT.dispose(); envRT = pmrem.fromScene(envScene, 0, 0.1, 100); scene.environment = envRT.texture; envDirty = false; envTimer = 0.25; }
-  return { night, day, time:S.time, rain:rainK, fog:fogK, sunDir:dir };
+  return { night, day, time:S.time, rain:rainK, fog:fogK, sunDir:dir, wind:S.wind, temp:SURF.temp };
 }
 
 /* ============================== HUD ============================== */
@@ -2787,18 +3009,44 @@ hudGroup('g-biome', BIOMES.map(b=>[b.id,b.label]), startId, id => loadBiome(id))
 hudGroup('g-tod', Object.keys(TOD).map(k=>[k,cap(k)]), 'dusk', k => S.tSun=[...TOD[k]]);
 hudGroup('g-wx', Object.keys(WX).map(k=>[k,cap(k)]), 'clear', k => S.tWx=[...WX[k]]);
 hudGroup('g-q', Object.keys(QUALITY).map(k=>[k,QUALITY[k].label]), qKey, k => { qKey=k; Q=QUALITY[k]; applyQuality(); loadBiome(activeDef.id); });
+hudGroup('g-hand', [['look','Look'],['fire','Fire'],['frost','Frost'],['water','Water'],['storm','Storm'],['nature','Grow'],['force','Force']], 'look', k => { S.hand = k; canvas.style.cursor = k === 'look' ? '' : 'crosshair'; });
+/* Per-world controls (e.g. the forest's seasons), rebuilt whenever a world loads */
+function biomeOptions(def){
+  const g = document.getElementById('g-opt'); g.replaceChildren(); g.hidden = !def.options?.length;
+  for (const o of def.options || []){ const sp = document.createElement('span'); sp.textContent = o.label; g.appendChild(sp);
+    for (const [k, label] of o.values){ const b = document.createElement('button'); b.textContent = label; b.dataset.k = k; b.setAttribute('aria-pressed', k === o.value);
+      b.onclick = () => { o.value = k; active.setOption?.(o.key, k); g.querySelectorAll('button').forEach(x => { if (o.values.some(v => v[0] === x.dataset.k)) x.setAttribute('aria-pressed', x === b); }); }; g.appendChild(b); }
+    active.setOption?.(o.key, o.value); }
+}
 const hud=document.getElementById('hud'), show=document.getElementById('show');
 function toggleHud(){ const off=!hud.classList.toggle('off'); show.hidden=off; }
 document.getElementById('hide').onclick=toggleHud; show.onclick=toggleHud;
 
 /* ============================== INPUT ============================== */
 addEventListener('keydown', e => { S.keys[e.code]=true; if (e.code==='KeyH') toggleHud();
-  const n=+e.key; if (n>=1 && n<=BIOMES.length) document.querySelector(`#g-biome [data-k="${BIOMES[n-1].id}"]`).click(); });
+  if (e.code==='KeyF' && !e.repeat) touchAt(0, 0);
+  const n = e.code==='Minus' ? 10 : /^Digit\d$/.test(e.code) ? (+e.code.slice(5) + 9) % 10 : -1;   // 1-9, 0, minus
+  if (n>=0 && n<BIOMES.length) document.querySelector(`#g-biome [data-k="${BIOMES[n].id}"]`).click(); });
 addEventListener('keyup', e => S.keys[e.code]=false);
 addEventListener('blur', () => S.keys={});
-let drag=null;
-canvas.addEventListener('pointerdown', e => { drag={x:e.clientX,y:e.clientY,id:e.pointerId}; canvas.setPointerCapture(e.pointerId); });
-canvas.addEventListener('pointerup', () => drag=null);
+let drag=null, press=null;
+canvas.addEventListener('pointerdown', e => { drag={x:e.clientX,y:e.clientY,id:e.pointerId}; press={x:e.clientX,y:e.clientY,t:performance.now()}; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointerup', e => { drag=null;
+  // a click (not a drag) with a Touch element selected strikes the ground under the pointer
+  if (press && S.hand !== 'look' && Math.hypot(e.clientX-press.x, e.clientY-press.y) < 6 && performance.now()-press.t < 500){
+    const locked = document.pointerLockElement===canvas, r = canvas.getBoundingClientRect();
+    touchAt(locked ? 0 : (e.clientX-r.left)/r.width*2-1, locked ? 0 : -((e.clientY-r.top)/r.height*2-1)); }
+  press=null; });
+/* Ray-march the height field from the camera through a screen point, then bisect onto the surface */
+const _ray = new THREE.Raycaster();
+function pickGround(nx, ny){
+  _ray.setFromCamera(new THREE.Vector2(nx, ny), camera); const o = _ray.ray.origin, d = _ray.ray.direction, P = V3();
+  let t0 = 0, t = 0.5;
+  while (t < 1500){ P.copy(o).addScaledVector(d, t); if (P.y <= active.heightAt(P.x, P.z)){ for (let i=0;i<14;i++){ const tm = (t0 + t)/2; P.copy(o).addScaledVector(d, tm); if (P.y <= active.heightAt(P.x, P.z)) t = tm; else t0 = tm; } P.copy(o).addScaledVector(d, t); return P; }
+    t0 = t; t += Math.max(0.4, t*0.02); }
+  return null;
+}
+function touchAt(nx, ny){ if (S.hand === 'look' || !active) return; const p = pickGround(nx, ny); if (p) strike(S.hand, p); }
 canvas.addEventListener('pointermove', e => {
   const locked = document.pointerLockElement===canvas;
   if (!locked && (!drag || drag.id!==e.pointerId)) return;
@@ -2815,7 +3063,7 @@ stick.addEventListener('pointerup', () => { S.stick=[0,0]; knob.style.transform=
 function moveStick(e){ const r=stick.getBoundingClientRect(); let x=(e.clientX-r.left-48)/40, y=(e.clientY-r.top-48)/40; const m=Math.hypot(x,y); if (m>1){ x/=m; y/=m; } S.stick=[x,-y]; knob.style.transform=`translate(${x*30}px,${y*30}px)`; }
 
 /* ============================== LOOP ============================== */
-const meta=document.getElementById('meta'); let last=performance.now(), acc=0, frames=0;
+const meta=document.getElementById('meta'), statusEl=document.getElementById('status'); let last=performance.now(), acc=0, frames=0, statusT=0;
 const ease=(rate,dt)=>1-Math.exp(-rate*dt);
 const _fwd=new THREE.Vector3();
 function frame(now, forced){
@@ -2828,14 +3076,17 @@ function frame(now, forced){
 
   const K=S.keys, sp=(K.ShiftLeft||K.ShiftRight?60:16)*dt;
   const f=(K.KeyW||K.ArrowUp?1:0)-(K.KeyS||K.ArrowDown?1:0)+S.stick[1], r=(K.KeyD||K.ArrowRight?1:0)-(K.KeyA||K.ArrowLeft?1:0)+S.stick[0];
-  S.tPos.x += (Math.sin(S.tYaw)*f + Math.cos(S.tYaw)*r)*sp;
-  S.tPos.z += (-Math.cos(S.tYaw)*f + Math.sin(S.tYaw)*r)*sp;
-  if (K.KeyE||K.Space) S.tPos.y += sp*0.8;
-  if (K.KeyQ||K.KeyC) S.tPos.y -= sp*0.8;
-  const bd = activeDef.bounds;
-  if (bd){ const dx = S.tPos.x - bd[0], dz = S.tPos.z - bd[1], d = Math.hypot(dx, dz); if (d > bd[2]){ S.tPos.x = bd[0] + dx/d*bd[2]; S.tPos.z = bd[1] + dz/d*bd[2]; } }
-  const floor = Math.max(active.heightAt(S.tPos.x, S.tPos.z), activeDef.floor ?? 0) + 1.8;
-  S.tPos.y = clamp(S.tPos.y, floor, activeDef.ceiling ?? 1400);
+  if (!active.locomote?.(S, f, r, dt, K)){   // a world may take over movement (climbing a rock face)
+    S.tPos.x += (Math.sin(S.tYaw)*f + Math.cos(S.tYaw)*r)*sp;
+    S.tPos.z += (-Math.cos(S.tYaw)*f + Math.sin(S.tYaw)*r)*sp;
+    if (K.KeyE||K.Space) S.tPos.y += sp*0.8;
+    if (K.KeyQ||K.KeyC) S.tPos.y -= sp*0.8;
+    const bd = activeDef.bounds;
+    if (bd){ const dx = S.tPos.x - bd[0], dz = S.tPos.z - bd[1], d = Math.hypot(dx, dz); if (d > bd[2]){ S.tPos.x = bd[0] + dx/d*bd[2]; S.tPos.z = bd[1] + dz/d*bd[2]; } }
+    const floor = Math.max(active.heightAt(S.tPos.x, S.tPos.z), activeDef.floor ?? 0) + 1.8;
+    S.tPos.y = clamp(S.tPos.y, floor, activeDef.ceiling ?? 1400);
+    S.grounded = S.tPos.y < floor + 0.35;
+  }
   S.pos.lerp(S.tPos, ease(8,dt));
   S.yaw += (S.tYaw-S.yaw)*ease(12,dt); S.pitch += (S.tPitch-S.pitch)*ease(12,dt);
   const a=ease(2.2,dt), s0=S.sun[0], s1=S.sun[1]; S.sun[0]+=(S.tSun[0]-S.sun[0])*a; S.sun[1]+=(S.tSun[1]-S.sun[1])*a;
@@ -2849,6 +3100,8 @@ function frame(now, forced){
   verdantFrame(camera);
   for (const o of SCATTERS) o.update(S.pos);
   active.update?.(dt, env);
+  surfaceFrame(dt, env);
+  if ((statusT -= dt) < 0){ statusT = 0.25; const t = [active.status?.(env), surfaceStatus()].filter(Boolean).join(' · '); if (t !== statusEl.textContent) statusEl.textContent = t; }
   renderer.render(scene, camera);
 }
 applyQuality();
