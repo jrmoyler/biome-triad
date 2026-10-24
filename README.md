@@ -1,8 +1,11 @@
 # Biome Triad
 
-A real-time, explorable 3D biome engine built on Three.js (r160, WebGL2). It ships with six complete,
+A real-time, explorable 3D biome engine built on Three.js (r160, WebGL2). It ships with eleven complete,
 procedurally built worlds: the Amazon rainforest, tropical Sea islands, Ancient Egypt on the Nile, a frost-bitten
-Arctic archipelago, an erupting Volcanic valley and a divine Haven of floating islands above a sea of clouds.
+Arctic archipelago, an erupting Volcanic valley, a divine Haven of floating islands above a sea of clouds, an Ancient
+Temperate Forest, a Boreal Taiga, a Savanna, a Canyon and its Badlands, and Alpine Highlands. Every world runs a
+dynamic surface and environmental state layer: weather, fire and the Touch tools leave the ground wet, snowed on,
+frozen, scorched or trampled, and fire spreads with the wind.
 New biomes plug in as packages for open worlds, games and apps. Every world runs on to the horizon and keeps the
 viewer inside its playable area.
 
@@ -30,6 +33,22 @@ the state grid) stays inert and only the weather-driven wet and snow cover is sh
 | ![](docs/renders/volcano-aerial.jpg) | ![](docs/renders/haven.jpg) |
 | **Haven (tholos, halo, blossom groves)** | **Haven (sea of clouds)** |
 | ![](docs/renders/haven-temple.jpg) | ![](docs/renders/haven-cloudsea.jpg) |
+| **Forest (autumn stream at dusk)** | **Forest (elder oak with root buttresses)** |
+| ![](docs/renders/forest.jpg) | ![](docs/renders/forest-elder.jpg) |
+| **Forest (winter)** | **Taiga (frozen lake at dawn)** |
+| ![](docs/renders/forest-winter.jpg) | ![](docs/renders/taiga.jpg) |
+| **Taiga (blizzard)** | **Taiga (cracked and broken lake ice, footprints)** |
+| ![](docs/renders/taiga-blizzard.jpg) | ![](docs/renders/taiga-ice.jpg) |
+| **Savanna (controlled burn at dusk)** | **Savanna (wildfire front at night)** |
+| ![](docs/renders/savanna.jpg) | ![](docs/renders/savanna-wildfire.jpg) |
+| **Savanna (zebra herd)** | **Canyon (from the rim at golden hour)** |
+| ![](docs/renders/savanna-herd.jpg) | ![](docs/renders/canyon.jpg) |
+| **Canyon (haboob dust storm)** | **Canyon (cliff ledge trail)** |
+| ![](docs/renders/canyon-duststorm.jpg) | ![](docs/renders/canyon-ledge.jpg) |
+| **Alpine (meadow, rope bridge, glacier)** | **Alpine (avalanche)** |
+| ![](docs/renders/alpine.jpg) | ![](docs/renders/alpine-avalanche.jpg) |
+| **Alpine (storm: rain below the freezing level)** | |
+| ![](docs/renders/alpine-storm.jpg) | |
 
 ## Controls
 
@@ -130,6 +149,43 @@ All code lives in `index.html`, grouped into these sections:
     turning gold rings and two small shrines; a gilded double halo with a pillar of light and beams from the sky;
     waterfalls pouring off the rims; blossom and cypress groves, wildflowers, drifting rock debris and far islands;
     doves and golden motes.
+  - **Forest (Ancient Temperate Forest):** old-growth oak and beech in clumps and light gaps, giant elder oaks whose
+    root buttresses are part of the walkable ground, a meandering stream with bridging and hollow logs you can walk
+    across and through, a fallen-giant clearing with an upturned root plate, snags, holly and hazel, ferns, bluebells,
+    fly agaric and bracket fungi. *Seasons* (Spring, Summer, Autumn, Winter) recolour and drop the leaves on trees,
+    impostors, saplings and ground cover, repaint the leaf litter, add falling leaves, and in winter cool the air so
+    the Rain weather falls as snow. *Canopy occlusion*: a crown-cover grid shades sun and sky light, tints the
+    understorey green and drives the sun shafts (status: canopy %). *Destructible vegetation*: thousands of saplings
+    topple under Force or Storm strikes, and fire and trampling flatten the ground cover.
+  - **Taiga (Boreal Taiga):** spruce forest from a dedicated generator (drooping whorls, snow-laden needle shelves),
+    birch, wind-flagged krummholz at the treeline, a 640 m frozen lake and ponds, fallen pines, a moose, caribou on
+    the tundra and ravens. *Snow accumulation* thickens caps on rocks and logs, loads the spruce and buries trails.
+    *Footprints*: walking leaves boot prints that fresh snow fills; deer and fox tracks follow the animal trails.
+    *Breaking lake ice*: standing and running load the ice, cracks race and fork across it, it gives way under you
+    (you drop into the water), floes bob in the hole, fire melts it and frost refreezes it. *Blizzards*: the Rain
+    weather becomes a whiteout with sideways snow, gusts and spindrift (status: visibility).
+  - **Savanna (Savanna and Grasslands):** rolling plains of chest-high grass, umbrella acacias, baobabs and thorn
+    thickets, granite kopjes, termite mounds, two watering holes, herds of impala, zebra, wildebeest and giraffe, and
+    circling vultures. *Concealment*: in tall grass you are hidden (crouch with Q); exposed, you startle the herds.
+    *Wind-driven grass*: gust fronts roll across the plain along the wind. *Wildfire*: a burn is already running,
+    dry lightning ignites more in storms, embers start spot fires downwind, herds flee the front, and fuel is bounded
+    by tracks, pools and the plain's edge. *Surface dust*: dust devils, stampede dust and dust you kick up when moving
+    fast; rain lays it.
+  - **Canyon (Canyon and Badlands):** a winding gorge cut through thirteen sediment beds of cliffs and benches, side
+    canyons, buttes, hoodoos and badlands, mesas on the horizon, a braided dry wash, alcoves, crystal and copper
+    deposits, juniper, pinyon, cottonwood, yucca and agave, ravens and condors. *Rockfall*: boulders break from
+    ledges, bounce and roll down the talus, raise dust and stay as debris. *Erosion decals*: desert varnish, runoff
+    stains, tafoni and salt crust on the cliffs, mud cracks and salt rings in the wash; rain darkens and widens them.
+    *Ledge traversal*: a cliff trail keeps you on the ledge (status: drop below). *Dust storms*: the Rain weather
+    brings a haboob, then a cloudburst. *Echo propagation*: strikes, rockfall and footsteps echo off the walls with
+    delays from ray casts, panned by direction (WebAudio starts on your first click).
+  - **Alpine (Alpine Highlands):** a U-shaped valley climbing to a glacier and cirque, banded cliffs, meadows with
+    flowers, scree fans, a glacial stream with cascades, a walkable rope bridge over a gorge that sways in the wind, a
+    bolted climbing crag, a hut, choughs and eagles. *Elevation-dependent weather*: rain below the freezing level,
+    sleet around it and snow above, a cloud band at the freezing level, a snowline that falls in storms.
+    *Avalanches* release from loaded slopes or Force/Storm strikes and run down as a powder cloud and debris.
+    *Rock climbing*: walk into the crag's route and climb with W/S. *Wind exposure*: ridges are windier than hollows,
+    with buffeting, spindrift and wind chill.
 
 ## Adding a biome
 
@@ -232,3 +288,12 @@ legacy/                        The original GLSL ES 3.00 raymarched version this
   (about 0.6 to 1.5 million triangles at Balanced).
 - Cooled lava flows, sulfur crusts and the glacier are painted per terrain vertex, so their outlines follow the
   terrain grid (5 to 10 m) when seen from above.
+- The five newer worlds were also only measured in software. At Balanced their opening views run about 1.05 to 1.85
+  million triangles; the Forest (252), Taiga (258) and Savanna (about 300) are the heaviest in draw calls, mostly from
+  the 70 m tree tiles and their shadow pass.
+- The surface layer is a 3 m grid simulated near the viewer, so scorch, snow and ice edges are soft at that scale,
+  and the Taiga's broken-ice holes are about 1.3 m blocky. Far from the viewer only the ambient weather field shows.
+- The Canyon's echoes and footsteps could not be listened to in the headless harness; only their timing, status and
+  wall glows were checked. The Alpine glacier's seracs read pale and flat, and the Forest's fallen giant reads as a
+  smooth mossy slab from the side.
+- Herds, rooks, ravens and the avalanche run on simple CPU rules rather than real flocking or snow physics.

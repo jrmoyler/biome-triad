@@ -2857,7 +2857,449 @@ Helios.registerBiome({
   }
 });
 
-/* @@FOREST@@ */
+/* ============================== FOREST ============================== */
+/* Mushroom cluster: curved stems under domed caps with a rolled lip and a gilled underside.
+   kind 0 fly agaric (red, white warts), 1 brown boletes, 2 tan honey-fungus tufts */
+function forestMushroomGeo(seed, kind){
+  const r = rng(seed), b = geoBuf(), n = kind === 0 ? 2 + (r()*2|0) : 5 + (r()*6|0);
+  const pal = [[lin(0.72,0.07,0.03), lin(0.94,0.92,0.84), lin(0.93,0.9,0.8)], [lin(0.4,0.24,0.11), lin(0.8,0.72,0.55), lin(0.72,0.64,0.36)], [lin(0.8,0.62,0.36), lin(0.88,0.82,0.68), lin(0.84,0.74,0.56)]][kind];
+  const [capC, stemC, gillC] = pal, wart = lin(0.96,0.95,0.9);
+  for (let m=0;m<n;m++){
+    const a = r()*TAU, rad = kind === 0 ? Math.sqrt(r())*0.35 : Math.sqrt(r())*0.16, bx = Math.cos(a)*rad, bz = Math.sin(a)*rad;
+    const H = (kind === 0 ? 0.16 + r()*0.14 : kind === 1 ? 0.07 + r()*0.08 : 0.05 + r()*0.08)*(m === 0 ? 1.25 : 1), lean = (r() - 0.5)*(kind === 2 ? 0.7 : 0.25), la = r()*TAU;
+    const sr = kind === 1 ? H*0.22 : H*0.09, cr = kind === 0 ? H*0.62 : kind === 1 ? H*0.75 : H*0.55, ch = cr*(kind === 0 ? 0.55 : 0.5);
+    const pts = [], rr = []; for (let k=0;k<=4;k++){ const t = k/4; pts.push(V3(bx + Math.cos(la)*lean*H*t*t, H*t, bz + Math.sin(la)*lean*H*t*t)); rr.push(sr*(1 + (kind === 1 ? 0.6 : 0.25)*(1 - t))); }
+    const s0 = b.P.length/3; tubeInto(b, pts, rr, 7, { ao:()=>1 }); for (let i=s0*3;i<b.C.length;i+=3){ b.C[i] = stemC[0]; b.C[i+1] = stemC[1]; b.C[i+2] = stemC[2]; }
+    const top = pts[4], RG = 6, SG = 14, cb = b.P.length/3;
+    for (let j=0;j<=RG;j++){ const th = j/RG*Math.PI*0.58, lip = j === RG ? 0.92 : 1;
+      for (let q=0;q<=SG;q++){ const ph = q/SG*TAU, sx = Math.sin(th)*cr*lip, x = top.x + Math.cos(ph)*sx, z = top.z + Math.sin(ph)*sx, y = top.y + ch*(Math.cos(th) - 0.55) - (j === RG ? ch*0.12 : 0);
+        b.P.push(x, y, z); const nx = Math.cos(ph)*Math.sin(th), ny = Math.cos(th), nz = Math.sin(ph)*Math.sin(th); b.N.push(nx, ny, nz); b.UV.push(q/SG, j/RG);
+        const spot = kind === 0 && j > 0 && j < RG && hash2(j*7.1 + seed, q*3.3 + m) > 0.7, k2 = 0.8 + 0.25*Math.cos(th);
+        const c = spot ? wart : capC; b.C.push(c[0]*k2, c[1]*k2, c[2]*k2); } }
+    for (let j=0;j<RG;j++) for (let q=0;q<SG;q++){ const a0 = cb + j*(SG+1) + q, a1 = a0 + SG + 1; b.I.push(a0, a1, a0+1, a0+1, a1, a1+1); }
+    const gb0 = b.P.length/3, lipR = Math.sin(Math.PI*0.58)*cr*0.92, ly = top.y + ch*(Math.cos(Math.PI*0.58) - 0.55) - ch*0.12;   // gills: annulus from the lip in to the stem
+    for (const [rad2, yy] of [[lipR, ly], [sr*1.2, ly + ch*0.25]]) for (let q=0;q<=SG;q++){ const ph = q/SG*TAU; b.P.push(top.x + Math.cos(ph)*rad2, yy, top.z + Math.sin(ph)*rad2); b.N.push(0, -1, 0); b.UV.push(q/SG, 0); b.C.push(gillC[0]*0.8, gillC[1]*0.8, gillC[2]*0.8); }
+    for (let q=0;q<SG;q++){ const a0 = gb0 + q, a1 = a0 + SG + 1; b.I.push(a0, a0+1, a1, a0+1, a1+1, a1); }
+  }
+  return owned(geoFinish(b));
+}
+/* Bracket fungus: stacked half-shelves with concentric growth bands and a pale rim; attached face at z = 0, shelf grows toward +z */
+function forestBracketGeo(seed){
+  const r = rng(seed), b = geoBuf(), m = 2 + (r()*3|0), dk = lin(0.3,0.2,0.12), lt = lin(0.7,0.56,0.36), rim = lin(0.92,0.88,0.78), under = lin(0.88,0.84,0.72);
+  for (let k=0;k<m;k++){
+    const W = 0.32 + r()*0.25 - k*0.04, D = W*(0.55 + r()*0.2), y0 = k*0.11 + (r() - 0.5)*0.03, x0 = (r() - 0.5)*0.15, T = 0.05, RG = 3, SG = 8;
+    for (const side of [1, -1]){ const base = b.P.length/3;
+      for (let i=0;i<=RG;i++){ const f = i/RG; for (let q=0;q<=SG;q++){ const ph = q/SG*Math.PI, x = x0 + Math.cos(ph)*W*Math.max(f, 0.02), z = Math.sin(ph)*D*Math.max(f, 0.02);
+        const y = side > 0 ? y0 + T*(1 - f*f)*1.4 + 0.012*Math.sin(f*30) : y0 - T*0.3*(1 - f);
+        b.P.push(x, y, z); b.N.push(side > 0 ? Math.cos(ph)*0.3*f : 0, side, side > 0 ? Math.sin(ph)*0.3*f : 0); b.UV.push(f, q/SG);
+        const band = 0.5 + 0.5*Math.sin(f*9 + k*1.7), c = side < 0 ? under : f > 0.9 ? rim : [lerp(dk[0], lt[0], band), lerp(dk[1], lt[1], band), lerp(dk[2], lt[2], band)];
+        b.C.push(c[0], c[1], c[2]); } }
+      for (let i=0;i<RG;i++) for (let q=0;q<SG;q++){ const a0 = base + i*(SG+1) + q, a1 = a0 + SG + 1; if (side > 0) b.I.push(a0, a0+1, a1, a0+1, a1+1, a1); else b.I.push(a0, a1, a0+1, a0+1, a1, a1+1); } }
+  }
+  return owned(geoFinish(b));
+}
+/* Woody understorey: thin bark stems (one for a sapling, several for hazel or holly) carrying leaf-spray cards from a
+   species leaf atlas (2x2 cells, as in genTree). Stems sample the atlas twig base, so one alpha-tested material does both. */
+function forestBushGeo(seed, o){
+  const r = rng(seed), b = geoBuf(), bark = lin(0.4,0.31,0.22);
+  for (let st=0; st<o.stems; st++){
+    const az = r()*TAU, lean = o.stems > 1 ? 0.12 + r()*0.3 : r()*0.06, H = o.h*(0.65 + 0.45*r()), pts = [], rr = [];
+    for (let k=0;k<=5;k++){ const t = k/5; pts.push(V3(Math.cos(az)*lean*H*t + perlin(t*2, seed + st)*0.22*t, H*t, Math.sin(az)*lean*H*t + perlin(t*2 + 4, seed + st)*0.22*t)); rr.push(o.r*(1 - 0.75*t) + 0.006); }
+    const v0 = b.P.length/3; tubeInto(b, pts, rr, 5, { ao:i => 0.55 + 0.09*i });
+    for (let i=v0;i<b.P.length/3;i++){ b.UV[i*2] = 0.25; b.UV[i*2+1] = 0.49; for (let j=0;j<3;j++) b.C[i*3+j] *= bark[j]*3.6; }
+    for (let c=0;c<o.cards;c++){
+      const t = o.from + (1 - o.from)*Math.sqrt(r()), i0 = Math.min(4, Math.floor(t*5)), oa = r()*TAU, out = V3(Math.cos(oa), 0, Math.sin(oa));
+      const p = pts[i0].clone().lerp(pts[i0 + 1], t*5 - i0).addScaledVector(out, o.spread*(0.25 + 0.75*r())*(1.1 - t*0.4)), sz = o.card*(0.75 + 0.5*r());
+      const ax = out.clone().add(V3((r() - 0.5)*0.8, 0.15 + r()*0.5, (r() - 0.5)*0.8)).normalize(), sv = V3().crossVectors(ax, V3(r() - 0.5, r() - 0.5, r() - 0.5).normalize()).normalize(), b0 = p.clone().addScaledVector(ax, -sz*0.3);
+      const cs = [b0.clone().addScaledVector(sv, -sz/2), b0.clone().addScaledVector(sv, sz/2), b0.clone().addScaledVector(sv, sz/2).addScaledVector(ax, sz), b0.clone().addScaledVector(sv, -sz/2).addScaledVector(ax, sz)];
+      const cell = (r()*4)|0, u0 = (cell%2)*0.5, w0 = Math.floor(cell/2)*0.5, uv = [[u0, w0 + 0.5], [u0 + 0.5, w0 + 0.5], [u0 + 0.5, w0], [u0, w0]], k = 0.72 + 0.4*r(), base = b.P.length/3;
+      const n = out.clone().multiplyScalar(0.55).add(V3(0, 0.85, 0)).normalize();
+      cs.forEach((v, q) => { b.P.push(v.x, v.y, v.z); b.N.push(n.x, n.y, n.z); b.UV.push(uv[q][0], uv[q][1]); b.C.push(k, k, k*0.95); });
+      b.I.push(base, base+1, base+2, base, base+2, base+3); }
+  }
+  return owned(geoFinish(b));
+}
+/* Fallen trunk: tapered, gently bent tube with broken ends, moss on the upper side, pale end grain.
+   hollow: a second inward-facing tube and annular end rims, so it can be walked through. Lies along local x. */
+function forestLogGeo(seed, L, R, hollow, plate){
+  const r = rng(seed), b = geoBuf(), pts = [], rr = [], N = 16, ph = r()*9;
+  for (let i=0;i<=N;i++){ const t = i/N; pts.push(V3((t - 0.5)*L, R + 0.12*R*Math.sin(t*3 + ph), 0.3*R*perlin(t*2 + ph, 1.3))); rr.push(R*(1.08 - 0.22*t)*(1 + 0.05*perlin(t*9, ph))); }
+  tubeInto(b, pts, rr, 14, { ao:()=>1, uRep:3, vScale:2.2 });
+  const outerEnd = b.P.length/3;
+  if (hollow){ const s0 = b.P.length/3, i0 = b.I.length; tubeInto(b, pts, rr.map(q => q*0.86), 14, { ao:()=>0.45, uRep:3, vScale:2.2 });
+    for (let i=s0*3;i<b.N.length;i++) b.N[i] = -b.N[i];
+    for (let i=i0;i<b.I.length;i+=3){ const t = b.I[i+1]; b.I[i+1] = b.I[i+2]; b.I[i+2] = t; }
+    for (const e of [0, N]){ const o0 = e*15, i0b = s0 + e*15; for (let j=0;j<14;j++){ const a = o0 + j, c = i0b + j; if (e) b.I.push(a, c, a+1, a+1, c, c+1); else b.I.push(a, a+1, c, a+1, c+1, c); } } }
+  else for (const e of [0, N]){ const ctr = b.P.length/3, c = pts[e]; b.P.push(c.x, c.y, c.z); b.N.push(e ? 1 : -1, 0, 0); b.UV.push(0.5, 0.5); b.C.push(1.6, 1.25, 0.85);
+    for (let j=0;j<14;j++){ const a = e*15 + j; if (e) b.I.push(ctr, a, a+1); else b.I.push(ctr, a+1, a); } }
+  if (plate){   // upturned root plate: a disc of soil bristling with torn roots, standing at the -x end
+    const c0 = pts[0].clone().add(V3(-0.4, 0, 0)), RP = R*2.8, ring = 18, rings = 6;
+    for (const side of [-1, 1]){ const S0 = b.P.length/3;   // soil face toward the crater and its back, each with its own normal
+      for (let i=0;i<=rings;i++) for (let q=0;q<=ring;q++){ const a = q/ring*TAU, rr2 = RP*(i/rings)*(1 + 0.18*perlin(Math.cos(a)*2 + seed, Math.sin(a)*2)), y = c0.y + Math.sin(a)*rr2*0.85, z = c0.z + Math.cos(a)*rr2;
+        b.P.push(c0.x - 0.6*(i/rings)**2*R + 0.3*perlin(y, z) + (side > 0 ? 0.25 : 0), Math.max(y, -R*0.6), z); b.N.push(side*0.8, 0.45, 0); b.UV.push(0.5, 0.5); b.C.push(2.0, 2.0, 2.0); }
+      for (let i=0;i<rings;i++) for (let q=0;q<ring;q++){ const a0 = S0 + i*(ring+1) + q, a1 = a0 + ring + 1; if (side < 0) b.I.push(a0, a1, a0+1, a0+1, a1, a1+1); else b.I.push(a0, a0+1, a1, a0+1, a1+1, a1); } }
+    for (let k=0;k<22;k++){ const a = r()*TAU, L2 = RP*(0.7 + 0.6*r()), q2 = [];
+      for (let i=0;i<=5;i++){ const t = i/5, rr2 = lerp(RP*0.2, L2, t); q2.push(V3(c0.x - 0.4 - t*t*R*(0.5 + r()), c0.y + Math.sin(a)*rr2*0.85 - t*t*0.6, c0.z + Math.cos(a)*rr2)); }
+      tubeInto(b, q2, q2.map((_, i) => R*0.16*(1 - i/6) + 0.03), 5, { ao:() => 0.7, uRep:1, vScale:3 }); } }
+  const g = owned(geoFinish(b)), p = g.attributes.position, n = g.attributes.normal, col = g.attributes.color, bark = lin(0.5,0.42,0.33), moss = lin(0.2,0.27,0.09), pale = lin(0.62,0.5,0.34), soil = lin(0.36,0.27,0.18);
+  for (let i=0;i<p.count;i++){
+    const ao = col.getX(i); if (ao > 1.9){ const k = 0.7 + 0.5*perlin(p.getY(i)*1.3, p.getZ(i)*1.3); col.setXYZ(i, soil[0]*k, soil[1]*k, soil[2]*k); continue; } if (ao > 1.2){ col.setXYZ(i, pale[0], pale[1], pale[2]); continue; }
+    const mm = i < outerEnd ? smoothstep(0.3, 0.75, n.getY(i) + 0.5*perlin(p.getX(i)*0.6 + seed, p.getZ(i)*0.6 + p.getY(i)*0.4))*0.85 : 0, k = 0.8 + 0.35*perlin(p.getX(i)*3, p.getY(i)*3 + seed);
+    for (let j=0;j<3;j++) col.setComponent(i, j, lerp(bark[j]*k, moss[j]*(0.8 + 0.4*k), mm)*ao);
+  }
+  return g;
+}
+
+Helios.registerBiome({
+  id:'forest', label:'Forest', bounds:[0,-300,1080], windy:0.8,
+  climate:{ temp:13, night:5 }, surface:{ humidity:0.8, spread:0.5 },
+  clouds:{ cover:0.55, base:1500, top:3300, cirrus:0.35 },
+  sky:{ turbidity:4.5, rayleigh:1.8, mie:0.005, mieG:0.82 },
+  fog:{ density:0.0017, tint:[0.94,1.0,0.92], storm:0.6 },
+  ground:[0.18,0.16,0.09],
+  options:[{ key:'season', label:'Season', values:[['spring','Spring'],['summer','Summer'],['autumn','Autumn'],['winter','Winter']], value:'autumn' }],
+  camera(){ const sx = z => 26*Math.sin(z*0.0063 + 0.4) + 14*Math.sin(z*0.019 + 1.7) + 6*Math.sin(z*0.041); return { pos:[sx(70) + 13, 4.5, 70], look:[sx(-150) + 4, 7, -150] }; },
+  build(k){
+    const { noise:{fbm,ridged,perlin}, rng, smoothstep, lerp, srgb, lin, scatter, plantMat, fernPlant, broadleafPlant, bladeClump, boulderGeo, gullGeo, critterMat } = k;
+    const sx = z => 26*Math.sin(z*0.0063 + 0.4) + 14*Math.sin(z*0.019 + 1.7) + 6*Math.sin(z*0.041);
+    const sw = z => 5.2 + 1.6*Math.sin(z*0.013 + 0.5);
+    const CZ = -300, HALF = 1200;
+    const glade = (x,z) => perlin(x*0.0042 + 11, z*0.0042) + 0.3*perlin(x*0.017, z*0.017);
+    const ground0 = (x,z) => {
+      const d = Math.abs(x - sx(z)), w = sw(z);
+      const hills = Math.max(0, 17*fbm(x*0.0024 + 3, z*0.0024, 4) + 5 + 7*ridged(x*0.0055, z*0.0055, 3) - 3);
+      const g = 1.9 + 0.8*fbm(x*0.03, z*0.03, 3) + 0.25*perlin(x*0.15, z*0.15) + hills*smoothstep(12, 140, d);
+      const bed = -1.25*(1 - Math.min(1, (d/w)**2)) - 0.15*perlin(x*0.2, z*0.2);
+      return lerp(bed, g, smoothstep(w*0.75, w*1.7, d));
+    };
+    // ---- Elders: the giants, with root fins radiating over the forest floor
+    const R = rng(4242), elders = [];
+    const addElder = (x, z, s, arch) => { const r = 2.15*s, n = 5 + (R()*3|0); elders.push({ x, z, s, r, n, ph:R()*TAU, hf:1.3*s, Rm:r + 12*s, arch }); };
+    addElder(sx(18) + 19, 18, 1.2, true); addElder(sx(-28) - 21, -28, 1.15, false); addElder(sx(-95) + 30, -95, 1.1, true); addElder(sx(-210) - 28, -210, 1.05, true); addElder(sx(150) - 28, 150, 1.0, false);
+    const GAP = { x:sx(-150) + 42, z:-150, r:34 };   // where an elder fell: a clearing of light with the trunk across it
+    for (let i=0;i<900 && elders.length<40;i++){
+      const x = (R() - 0.5)*2300, z = CZ + (R() - 0.5)*2300, d = Math.abs(x - sx(z));
+      if (d < 18 || (R() < 0.6 && d > 260) || glade(x,z) > 0.25 || Math.hypot(x - GAP.x, z - GAP.z) < GAP.r + 20) continue;
+      if (elders.some(E => Math.hypot(E.x - x, E.z - z) < 55)) continue;
+      addElder(x, z, 0.8 + R()*0.45, R() < 0.35);
+    }
+    const rootH = (E, x, z) => { const dx = x - E.x, dz = z - E.z; if (Math.abs(dx) > E.Rm || Math.abs(dz) > E.Rm) return 0; const d = Math.hypot(dx, dz); if (d > E.Rm) return 0;
+      const a = Math.atan2(dz, dx) - 0.06*Math.sin(d*0.45 + E.ph), rib = Math.pow(Math.max(0, Math.cos(a*E.n + E.ph)), 3), u = Math.max(0, (d - E.r)/(E.Rm - E.r));
+      return E.hf*rib*Math.pow(1 - Math.min(1, u), 1.6) + 1.1*E.s*Math.exp(-((d/(E.r*1.6))**2)); };
+    // Logs that bridge the stream: their tops are walkable
+    const bridges = [];
+    for (const z of [-60, -330, 240, -620]){ const c = sx(z), w = sw(z), a = 0.25*(R() - 0.5), L = w*2 + 13, R0 = 0.85 + R()*0.25;
+      const x0 = c - Math.cos(a)*L/2, z0 = z - Math.sin(a)*L/2, x1 = c + Math.cos(a)*L/2, z1 = z + Math.sin(a)*L/2;
+      bridges.push({ x0, z0, x1, z1, L, R:R0, y0:ground0(x0, z0) + R0*0.45, y1:ground0(x1, z1) + R0*0.45 }); }
+    const bridgeTop = (B, x, z) => { const dx = B.x1 - B.x0, dz = B.z1 - B.z0, t = ((x - B.x0)*dx + (z - B.z0)*dz)/(B.L*B.L); if (t < 0 || t > 1) return -1e9;
+      const q = Math.abs((x - B.x0)*dz - (z - B.z0)*dx)/B.L; if (q > B.R*0.8) return -1e9; return lerp(B.y0, B.y1, t) + Math.sqrt(B.R*B.R - q*q) - 0.05; };
+    const heightAt = (x,z) => { let h = ground0(x,z); for (const E of elders) h += rootH(E, x, z); for (const B of bridges) h = Math.max(h, bridgeTop(B, x, z)); return h; };
+
+    const group = new THREE.Group();
+    // Past the tile the apron rises into a canopy surface whose colour follows the season in the shader (kind -1)
+    const canopyLift = (x,z) => 27*smoothstep(HALF + 20, HALF + 260, Math.max(Math.abs(x), Math.abs(z - CZ)))*(0.85 + 0.3*perlin(x*0.02, z*0.02));
+    const T = makeTerrain({ size:HALF*2, cz:CZ, seg:380, height:heightAt, apron:{ size:9000, seg:150, lift:canopyLift },
+      detail:{ rock:[0.34,0.34,0.28], rockLo:0.42, bump:15, wet:0.45, strata:0.5 },
+      kind:(x,y,z) => canopyLift(x,z) > 2 ? -1 : 0,
+      color:(c,x,y,z,ny) => {
+        if (canopyLift(x,z) > 2){ const n = 0.5 + 0.5*perlin(x*0.011, z*0.011), m = 0.5 + 0.5*perlin(x*0.05, z*0.05); return srgb(c, 0.13 + 0.05*m, 0.21 + 0.08*n, 0.07 + 0.03*m); }
+        const n = 0.5 + 0.5*perlin(x*0.03, z*0.03), m = 0.5 + 0.5*perlin(x*0.13, z*0.13), d = Math.abs(x - sx(z));
+        if (y < 0.15) return srgb(c, 0.2 + 0.05*m, 0.17 + 0.04*m, 0.12 + 0.03*n);
+        if (d < sw(z)*1.9) return srgb(c, 0.2 + 0.04*n, 0.22 + 0.06*m, 0.1 + 0.02*n);
+        const moss = smoothstep(0.1, 0.55, perlin(x*0.018 + 4, z*0.018) + 0.4*smoothstep(0.4, 1.2, heightAt(x,z) - ground0(x,z)));
+        return srgb(c, lerp(0.34 + 0.06*n, 0.2, moss), lerp(0.25 + 0.05*n, 0.28 + 0.05*m, moss), lerp(0.15 + 0.03*m, 0.08, moss));
+      } });
+    // Leaf litter: drifts of fallen leaves whose colours and cover follow the season
+    const LIT = { uLitA:{ value:new THREE.Color() }, uLitB:{ value:new THREE.Color() }, uLitK:{ value:0.9 }, uSeason:VU.uSeason };
+    { const tm = T.material, prev = tm.onBeforeCompile;
+      tm.onBeforeCompile = sh => { prev(sh); Object.assign(sh.uniforms, LIT);
+        sh.fragmentShader = 'uniform vec3 uLitA, uLitB; uniform float uLitK; uniform vec4 uSeason;\n' + sh.fragmentShader.replace('        // surface state: rain-dark', `        {
+          float lm = (1.0 - rk)*smoothstep(0.9, 1.9, vWP.y)*step(-0.5, vKind);
+          float drift = tvn(twp*1.3 + n3*2.0)*0.6 + tvn(twp*5.0)*0.4, spk = tvn(twp*26.0 + 5.0)*0.6 + tvn(twp*61.0)*0.4;   // drifts, then single leaves up close
+          float farL = smoothstep(5.0, 28.0, length(vViewPosition));
+          vec3 lc = mix(uLitA, uLitB, smoothstep(0.3, 0.7, tvn(twp*7.0 + 7.0)*0.7 + 0.3*spk))*mix(0.5 + 0.95*spk, 0.88, farL);
+          diffuseColor.rgb = mix(diffuseColor.rgb, lc, uLitK*smoothstep(0.28, 0.55, drift + 0.2*n1)*lm);
+          if (vKind < -0.5){   // distant canopy: the same seasonal turn as the trees
+            float L = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)); vec3 aut = mix(vec3(2.3, 1.05, 0.18), vec3(2.4, 0.5, 0.12), step(0.5, tvn(twp*0.03)));
+            diffuseColor.rgb = mix(diffuseColor.rgb, L*aut, uSeason.x*0.8);
+            diffuseColor.rgb = mix(diffuseColor.rgb, L*vec3(1.15, 1.9, 0.5), uSeason.z);
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.13, 0.11, 0.09)*(0.7 + 0.6*n1), uSeason.y*0.8);
+          }
+        }
+        // surface state: rain-dark`); };
+      tm.customProgramCacheKey = () => 'terrainForest'; }
+    group.add(T);
+    group.add(makeWater({ size:9000, cz:CZ, color:0x1c2a1d, distortion:1.1, scale:6 }));
+
+    // ---- Trees: oak and beech old growth, hazel understorey, the elders
+    const leafOak = () => atlas('oak', 51, { hue:0.25, sat:0.5, light:0.27, len:[48,72], width:0.42, count:[14,20], twig:'#4e3e2a' });
+    const leafBeech = () => atlas('beech', 52, { hue:0.23, sat:0.56, light:0.33, len:[40,60], width:0.52, count:[16,22], twig:'#5a4a36' });
+    const leafElder = () => atlas('elderOak', 53, { hue:0.26, sat:0.44, light:0.25, len:[52,76], width:0.4, count:[14,20], twig:'#463826' });
+    defineSpecies('forestOak', { seed:1301, leaves:leafOak, bark:0xa09482, tree:{ h:30, r:1.45, buttress:1.1, fins:6, lean:0.08, wobble:1.3, trunkTop:0.6, bStart:0.36, branches:10, el:[0.15,0.62], bLen:0.42, curl:0.16, subs:3, cR:5.6, flatY:0.6, cards:18, card:3.0, droop:0.12 } });
+    defineSpecies('forestBeech', { seed:1302, leaves:leafBeech, bark:0xc8c4ba, tree:{ h:32, r:1.05, buttress:0.8, fins:5, lean:0.05, wobble:0.5, trunkTop:0.82, bStart:0.45, branches:11, el:[0.4,0.95], bLen:0.3, curl:0.25, subs:2, cR:4.9, flatY:0.72, cards:18, card:2.7, droop:0.18 } });
+    defineSpecies('forestElder', { seed:1303, leaves:leafElder, bark:0x958a78, tree:{ h:48, r:2.3, buttress:1.9, fins:7, lean:0.04, wobble:1.6, trunkTop:0.55, bStart:0.36, branches:12, el:[0.08,0.5], bLen:0.48, curl:0.2, subs:3, cR:7.0, flatY:0.55, cards:30, card:3.2, droop:0.15 } });
+    const F = k.forest(), tint = (y=0) => new THREE.Color(0.86 + R()*0.28 + y, 0.88 + R()*0.22 + y*0.6, 0.8 + R()*0.3);
+    const CG = 8, CN = Math.ceil(HALF*2/CG), cover = new Float32Array(CN*CN);   // canopy-cover grid over the tile
+    const splat = (x, z, rad, k2) => { const i0 = Math.max(0, Math.floor((x - rad + HALF)/CG)), i1 = Math.min(CN-1, Math.floor((x + rad + HALF)/CG)), j0 = Math.max(0, Math.floor((z - CZ - rad + HALF)/CG)), j1 = Math.min(CN-1, Math.floor((z - CZ + rad + HALF)/CG));
+      for (let j=j0;j<=j1;j++) for (let i=i0;i<=i1;i++){ const dx = (i + 0.5)*CG - HALF - x, dz = (j + 0.5)*CG - HALF + CZ - z, q = 1 - (dx*dx + dz*dz)/(rad*rad); if (q > 0) cover[j*CN + i] += k2*q; } };
+    for (const E of elders){ F.add('forestElder', E.x, ground0(E.x, E.z) - 0.6, E.z, E.s, R()*TAU, tint(0.04)); splat(E.x, E.z, 26*E.s, 0.9); }
+    // Old growth: clumped and gappy, sizes from pole trees to giants. Stocking varies with two noise scales; a coarse
+    // occupancy grid keeps crowns apart in proportion to their size.
+    const camX = sx(70) + 13, occ = new Map(), OC = 10, stock = (x,z) => 0.55 + 0.75*perlin(x*0.009 + 5, z*0.009) + 0.35*perlin(x*0.031, z*0.031 + 2);
+    for (let i=0;i<26000;i++){
+      const x = (R() - 0.5)*HALF*2, z = CZ + (R() - 0.5)*HALF*2, d = Math.abs(x - sx(z)), w = sw(z), gl = glade(x,z);
+      if (d < w*1.9 || gl > 0.3 || R() > Math.pow(clamp(stock(x,z), 0, 1), 2.1) || Math.hypot(x - GAP.x, z - GAP.z) < GAP.r) continue;
+      if (Math.hypot(x - camX, z - 70) < 18 || (Math.abs(x - camX) < 14 && z < 70 && z > 30)) continue;   // keep the opening view's foreground open
+      const s = 0.5 + 1.0*Math.pow(R(), 1.7), sp = 6.5*s + 3;
+      if (elders.some(E => Math.abs(E.x - x) < 15*E.s + sp*0.5 && Math.abs(E.z - z) < 15*E.s + sp*0.5)) continue;
+      const ci = Math.floor(x/OC), cj = Math.floor(z/OC); let ok = true;
+      for (let a2=-2;a2<=2 && ok;a2++) for (let b2=-2;b2<=2 && ok;b2++) for (const t of occ.get((ci + a2) + ',' + (cj + b2)) || []) if (Math.hypot(t[0] - x, t[1] - z) < sp + t[2]) { ok = false; break; }
+      if (!ok) continue; const key = ci + ',' + cj; if (!occ.has(key)) occ.set(key, []); occ.get(key).push([x, z, sp]);
+      const y = ground0(x,z) - 0.4;
+      if (R() < 0.55){ F.add('forestOak', x, y, z, s, R()*TAU, tint()); splat(x, z, 15*s, 0.8); }
+      else { F.add('forestBeech', x, y, z, s, R()*TAU, tint()); splat(x, z, 12*s, 0.85); }
+    }
+    for (let i=0;i<cover.length;i++) cover[i] = Math.min(1, cover[i]);
+    const coverAt = (x, z) => { const fx = clamp((x + HALF)/CG - 0.5, 0, CN - 1.001), fz = clamp((z - CZ + HALF)/CG - 0.5, 0, CN - 1.001), i = fx|0, j = fz|0, u = fx - i, v = fz - j;
+      return lerp(lerp(cover[j*CN + i], cover[j*CN + i + 1], u), lerp(cover[(j+1)*CN + i], cover[(j+1)*CN + i + 1], u), v); };
+    group.add(F.build());
+    for (const [key, hm, ivyK] of [['forestOak', 3.5, 1], ['forestBeech', 2.2, 0.4], ['forestElder', 6.5, 1]]){ const m = SPECIES[key + '|' + qKey].woodMat; if (m.userData.forestMoss) continue;
+      m.userData.forestMoss = true; const prev = m.onBeforeCompile;
+      m.onBeforeCompile = sh => { prev(sh);
+        sh.vertexShader = 'varying float vHy;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n      vHy = position.y;');
+        sh.fragmentShader = 'varying float vHy;\n' + sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+        { float mz = smoothstep(${hm.toFixed(1)}, 0.2, vHy + 1.6*(tvn(vMapUv*vec2(3.0, 1.2)) - 0.5));
+          float ivy = smoothstep(0.55, 0.62, tvn(vMapUv*vec2(7.0, 3.0)) + 0.25*tvn(vMapUv*vec2(30.0, 14.0)))*smoothstep(${(hm*2.2).toFixed(1)}, 1.0, vHy)*${ivyK.toFixed(1)};
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.17, 0.25, 0.07)*(0.65 + 0.7*tvn(vMapUv*vec2(24.0, 10.0))), mz*0.85);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.045, 0.1, 0.035)*(0.7 + 0.6*tvn(vMapUv*vec2(60.0, 25.0))), ivy*0.9); }`); };
+      m.customProgramCacheKey = () => 'forestBark' + key; }
+
+    // ---- Exposed roots: tube fins over each elder's ridges, plus arching roots to walk beneath
+    const rootMat = new THREE.MeshStandardMaterial({ vertexColors:true, map:tex.ground, color:0x5c5246, roughness:0.95, envMapIntensity:0.25 });
+    { const b = geoBuf(), mossy = lin(0.3,0.36,0.16);
+      for (const E of elders){
+        for (let f=0; f<E.n; f++){ const a0 = (f*TAU - E.ph)/E.n, pts = [], rr = [];
+          for (let i=0;i<=12;i++){ const t = i/12, d = lerp(E.r*0.55, E.Rm*0.95, t), a = a0 + 0.06*Math.sin(d*0.45 + E.ph), x = E.x + Math.cos(a)*d, z = E.z + Math.sin(a)*d;
+            const u = Math.max(0, (d - E.r)/(E.Rm - E.r)), H = E.hf*Math.pow(1 - Math.min(1, u), 1.6) + 1.1*E.s*Math.exp(-((d/(E.r*1.6))**2)), fl = smoothstep(E.r*1.35, E.r*0.55, d);
+            const rho = lerp(0.12 + H*0.5, E.r*0.34, fl), rise = 2.2*E.s*fl*fl;   // flares thicken and climb into the bole as buttresses
+            pts.push(V3(x, ground0(x,z) + H - rho*0.95 + rise, z)); rr.push(rho*(1 + 0.18*perlin(d*0.6 + f*3.1, E.ph))); }
+          tubeInto(b, pts, rr, 8, { ao:i => 0.6 + 0.4*i/12, uRep:2, vScale:3 });
+          if (R() < 0.6){ const t0 = 0.6 + R()*0.25, o = pts[Math.round(t0*12)], a = a0 + (R() < 0.5 ? -1 : 1)*(0.4 + R()*0.4), L = 4 + R()*5, p2 = [];   // side root snaking off over the litter
+            for (let i=0;i<=6;i++){ const t = i/6, x = o.x + Math.cos(a)*L*t, z = o.z + Math.sin(a)*L*t; p2.push(V3(x, ground0(x,z) + 0.12*(1 - t), z)); }
+            tubeInto(b, p2, p2.map((_, i) => (0.22*(1 - i/7) + 0.04)*(1 + 0.25*perlin(i*0.9, f))), 6, { ao:() => 0.75, uRep:1, vScale:3 }); } }
+        if (E.arch){ const a0 = (Math.PI - E.ph)/E.n + (R() < 0.5 ? 0 : TAU/E.n), pts = [], rr = [];   // root arch: clear headroom underneath
+          for (let i=0;i<=16;i++){ const t = i/16, d = lerp(E.r*0.7, E.r + 10*E.s, t), x = E.x + Math.cos(a0)*d, z = E.z + Math.sin(a0)*d;
+            pts.push(V3(x, ground0(x,z) + 4.6*E.s*(1 - t*t) - 0.3*t, z)); rr.push(0.55*E.s*(1 - 0.5*t)*(1 + 0.2*perlin(t*6, E.ph))); }
+          tubeInto(b, pts, rr, 10, { ao:() => 0.85, uRep:2, vScale:3 }); }
+      }
+      const g = owned(geoFinish(b)), p = g.attributes.position, n = g.attributes.normal, c = g.attributes.color;
+      for (let i=0;i<p.count;i++){ const mm = smoothstep(0.2, 0.7, n.getY(i) + 0.3*perlin(p.getX(i)*0.5, p.getZ(i)*0.5)), ao = c.getX(i);
+        const k = 0.75 + 0.45*perlin(p.getX(i)*0.9, p.getZ(i)*0.9 + p.getY(i)); c.setXYZ(i, lerp(k, mossy[0]*2.2, mm)*ao, lerp(k, mossy[1]*2.2, mm)*ao, lerp(k*0.95, mossy[2]*2.2, mm)*ao); }
+      const m = new THREE.Mesh(g, rootMat); m.castShadow = m.receiveShadow = true; group.add(m); }
+
+    // ---- Fallen timber: logs over the floor, bridging trunks, hollow logs to walk through; bracket fungi
+    const logMat = plantMat({ wind:0, back:0, rock:true, map:tex.bark, roughness:0.95 }); logMat.userData.far.value = 1e6;
+    const logG = [forestLogGeo(11, 16, 0.75, false), forestLogGeo(12, 12, 0.6, false), forestLogGeo(13, 20, 0.95, false)], logL = logG.map(() => []), logs = [], LB = 40, logBins = new Map();
+    const putLog = (gi, x, z, ry, s, yOff = 0) => { const L = [16, 12, 20][gi]*s, Rr = [0.75, 0.6, 0.95][gi]*s, dx = Math.cos(ry), dz = -Math.sin(ry);
+      const h0 = ground0(x - dx*L/2, z - dz*L/2), h1 = ground0(x + dx*L/2, z + dz*L/2), y = Math.min(h0, h1, ground0(x, z)) - Rr*0.35 + yOff;
+      logL[gi].push({ p:new THREE.Vector3(x, y, z), s:new THREE.Vector3(s, s, s), ry, rz:Math.atan2(h1 - h0, L) });
+      const lg = { x, z, dx, dz, L, R:Rr }; logs.push(lg); const key = Math.floor(x/LB) + ',' + Math.floor(z/LB); if (!logBins.has(key)) logBins.set(key, []); logBins.get(key).push(lg); };
+    for (let i=0;i<Math.round(300*Math.max(0.6, Q.density));i++){ const x = (R() - 0.5)*2300, z = CZ + (R() - 0.5)*2300; if (Math.abs(x - sx(z)) < sw(z)*2.6) continue; putLog((R()*3)|0, x, z, R()*TAU, 0.7 + R()*0.6); }
+    for (const [x, z] of [[sx(40) + 9, 32], [sx(-130) - 14, -128], [sx(10) - 18, 8]]) putLog(2, x, z, R()*TAU, 1.0);
+    logG.forEach((g, i) => group.add(instTiled(g, logMat, logL[i], { tile:1200 })));
+    const nearLog = (x, z, pad = 0) => { const i0 = Math.floor(x/LB), j0 = Math.floor(z/LB); let best = 1e9;
+      for (let i=i0-1;i<=i0+1;i++) for (let j=j0-1;j<=j0+1;j++) for (const lg of logBins.get(i + ',' + j) || []){ const ux = x - lg.x, uz = z - lg.z, t = ux*lg.dx + uz*lg.dz; if (Math.abs(t) > lg.L/2) continue; best = Math.min(best, Math.abs(ux*lg.dz - uz*lg.dx) - lg.R - pad); }
+      return best; };
+    // bridging logs, hollow logs and the fallen giant: single instances, so they share the surface-aware log material (snow, scorch)
+    const one = (g, x, y, z, ry, rz) => group.add(instTiled(g, logMat, [{ p:new THREE.Vector3(x, y, z), s:new THREE.Vector3(1,1,1), ry, rz }], { tile:1e5 }));
+    for (const B of bridges) one(forestLogGeo(77 + bridges.indexOf(B), B.L, B.R, false), (B.x0 + B.x1)/2, (B.y0 + B.y1)/2 - B.R, (B.z0 + B.z1)/2, -Math.atan2(B.z1 - B.z0, B.x1 - B.x0), Math.atan2(B.y1 - B.y0, B.L));
+    let nh = 0;
+    for (const [x, z, ry] of [[sx(95) + 16, 95, 0.4], [sx(-60) + 20, -48, 1.9], [sx(-260) - 22, -262, 0.9], [sx(330) + 24, 330, 2.6]]){
+      const L = 14, Rr = 1.75, dx = Math.cos(ry), dz = -Math.sin(ry), h0 = ground0(x - dx*L/2, z - dz*L/2), h1 = ground0(x + dx*L/2, z + dz*L/2);
+      one(forestLogGeo(90 + nh++, L, Rr, true), x, Math.min(h0, h1) - Rr*0.3 - 0.05, z, ry, Math.atan2(h1 - h0, L)); }
+    { const L = 40, Rr = 1.9, ry = 0.5, dx = Math.cos(ry), dz = -Math.sin(ry), h0 = ground0(GAP.x - dx*L/2, GAP.z - dz*L/2), h1 = ground0(GAP.x + dx*L/2, GAP.z + dz*L/2);
+      one(forestLogGeo(99, L, Rr, false, true), GAP.x, Math.min(h0, h1) - Rr*0.35, GAP.z, ry, Math.atan2(h1 - h0, L));
+      const lg = { x:GAP.x, z:GAP.z, dx, dz, L, R:Rr }; logs.push(lg); const key = Math.floor(GAP.x/LB) + ',' + Math.floor(GAP.z/LB); if (!logBins.has(key)) logBins.set(key, []); logBins.get(key).push(lg); }
+    // standing dead wood: snags and broken stubs, mossy at the foot
+    { const snG = [snagGeo(1501), snagGeo(1502), snagGeo(1503)], snL = snG.map(() => []);
+      for (const g of snG){ const p = g.attributes.position, c = g.attributes.color; for (let i=0;i<p.count;i++){ const m2 = smoothstep(2.5, 0.2, p.getY(i)), v = c.getX(i); c.setXYZ(i, lerp(v*0.9, 0.3, m2), lerp(v*0.84, 0.42, m2), lerp(v*0.74, 0.16, m2)); } }
+      for (let i=0;i<Math.round(260*Math.max(0.6, Q.density));i++){ const x = (R() - 0.5)*2300, z = CZ + (R() - 0.5)*2300; if (Math.abs(x - sx(z)) < sw(z)*2.4 || nearLog(x, z, 1) < 0) continue;
+        const s = 1.0 + R()*1.1; snL[(R()*3)|0].push({ p:new THREE.Vector3(x, ground0(x,z) - 0.3, z), s:new THREE.Vector3(s*(1.3 + R()*0.6), s, s*(1.3 + R()*0.6)), ry:R()*TAU, c:new THREE.Color(0.85 + R()*0.3, 0.85 + R()*0.25, 0.85 + R()*0.2) }); }
+      snG.forEach((g, i) => group.add(instTiled(g, logMat, snL[i], { tile:1200 }))); }
+    { const brG = [forestBracketGeo(21), forestBracketGeo(22)], brL = [[], []], fm = plantMat({ wind:0, back:0.2 }); fm.userData.far.value = 1e6;
+      for (const E of elders) for (let q=0;q<3 + (R()*4|0);q++){ const a = R()*TAU, y = 1.6 + R()*5.5, rr = E.r*(1 - 0.78*Math.pow(y/(48*0.55*E.s), 0.75))*0.92;
+        brL[q&1].push({ p:new THREE.Vector3(E.x + Math.cos(a)*rr, ground0(E.x, E.z) - 0.6 + y, E.z + Math.sin(a)*rr), s:new THREE.Vector3(1,1,1).multiplyScalar(1.4 + R()*1.2), ry:Math.PI/2 - a, c:new THREE.Color(0.9 + R()*0.2, 0.9 + R()*0.2, 0.9 + R()*0.2) }); }
+      for (const lg of logs) if (R() < 0.2) for (let q=0;q<2 + (R()*3|0);q++){ const t = (R() - 0.5)*lg.L*0.8, sd = R() < 0.5 ? -1 : 1, x = lg.x + lg.dx*t - lg.dz*sd*lg.R*0.92, z = lg.z + lg.dz*t + lg.dx*sd*lg.R*0.92;
+        brL[q&1].push({ p:new THREE.Vector3(x, ground0(lg.x, lg.z) + lg.R*(0.4 + R()*0.6), z), s:new THREE.Vector3(1,1,1).multiplyScalar(0.8 + R()*0.7), ry:Math.atan2(-lg.dz*sd, lg.dx*sd) }); }
+      brG.forEach((g, i) => group.add(instTiled(g, fm, brL[i], { tile:2400, shadow:false }))); }
+
+    // ---- Saplings: CPU-posed instances, so a Force strike can topple them; fire burns them through the surface layer
+    // leaf materials for the woody understorey: the atlas cards turn, drop and flush with the season like the trees
+    const leafy = (o, deciduous) => { const m = plantMat({ ...o, alphaTest:0.5 }), prev = m.onBeforeCompile; m.envMapIntensity = 0.2;
+      m.onBeforeCompile = function(sh){ prev.call(this, sh); sh.uniforms.uSeason = VU.uSeason;
+        sh.fragmentShader = 'uniform vec4 uSeason;\n' + NOISE2D + sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+        { bool lp = diffuseColor.g > diffuseColor.r*1.04; float lh = tvn(vMapUv*28.0);
+          ${deciduous ? `if (lp && lh < uSeason.y*0.85) discard;
+          float L = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)); vec3 aut = lh < 0.5 ? vec3(2.3, 1.05, 0.18) : vec3(2.4, 0.55, 0.12);
+          if (lp){ diffuseColor.rgb = mix(diffuseColor.rgb, L*aut, uSeason.x*0.85); diffuseColor.rgb = mix(diffuseColor.rgb, L*vec3(1.15, 1.9, 0.5), uSeason.z); }` : ''}
+          if (lp) diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9, 0.93, 0.98), uSeason.w*smoothstep(0.4, 0.8, lh)); }`); };
+      m.customProgramCacheKey = () => 'forestLeaf' + deciduous + o.wind + o.back; return m; };
+    const sapMat = leafy({ wind:0.012, back:0.8, map:leafOak(), roughness:0.7 }, true); sapMat.userData.far.value = 1e6;
+    const sapG = forestBushGeo(31, { stems:1, h:3.2, r:0.035, cards:16, from:0.35, spread:0.45, card:0.75 }), saps = [], sapBins = new Map(), sd = new THREE.Object3D(), qYaw = new THREE.Quaternion(), qFall = new THREE.Quaternion(), Y = V3(0,1,0), AX = V3();
+    for (let i=0;i<Math.round(3200*Math.max(0.5, Q.density)) + 60;i++){ const near = i < 60, x = near ? sx(10) + 24 + (R() - 0.5)*30 : (R() - 0.5)*2200, z = near ? 10 + (R() - 0.5)*36 : CZ + (R() - 0.5)*2200, gl = glade(x,z), d = Math.abs(x - sx(z));   // a stand of saplings by the opening view
+      if (d < sw(z)*1.8 || (!near && gl < 0.15 && R() < 0.75) || nearLog(x, z, 0.5) < 0) continue;
+      const key = Math.floor(x/400) + ',' + Math.floor(z/400); if (!sapBins.has(key)) sapBins.set(key, []); saps.push({ x, y:heightAt(x,z) - 0.05, z, ry:R()*TAU, s:0.7 + R()*0.6, th:0, w:0, ax:0, az:0, falling:false, delay:0, key }); sapBins.get(key).push(saps[saps.length-1]); }
+    const sapMeshes = [];
+    for (const [key, list] of sapBins){ const m = new THREE.InstancedMesh(sapG, sapMat, list.length); let cx = 0, cz = 0;
+      list.forEach((s, i) => { s.m = m; s.i = i; cx += s.x; cz += s.z; sd.position.set(s.x, s.y, s.z); sd.rotation.set(0, s.ry, 0); sd.scale.setScalar(s.s); sd.updateMatrix(); m.setMatrixAt(i, sd.matrix);
+        m.setColorAt(i, new THREE.Color(0.85 + R()*0.3, 0.9 + R()*0.2, 0.8 + R()*0.3)); });
+      m.userData.c = V3(cx/list.length, 0, cz/list.length); m.castShadow = false; m.receiveShadow = true; m.computeBoundingSphere(); group.add(m); sapMeshes.push(m); }
+    const falling = []; let felled = 0;
+    const poseSap = s => { qYaw.setFromAxisAngle(Y, s.ry); AX.set(s.az, 0, -s.ax); qFall.setFromAxisAngle(AX, s.th); sd.quaternion.copy(qFall).multiply(qYaw); sd.position.set(s.x, s.y, s.z); sd.scale.setScalar(s.s); sd.updateMatrix(); s.m.setMatrixAt(s.i, sd.matrix); s.m.instanceMatrix.needsUpdate = true; };
+
+    // ---- Ground cover: ferns, wood sorrel and ivy, clearing grass, spring bluebells and ramsons, mushrooms, mossy boulders
+    const sc = [], uMat = plantMat({ wind:0.03, back:0.9 }), tintU = r => new THREE.Color(0.75 + r()*0.5, 0.85 + r()*0.3, 0.65 + r()*0.4);
+    const floor = (x, z) => { const d = Math.abs(x - sx(z)); return d > sw(z)*1.25 && nearLog(x, z, 0.2) > 0; };
+    const fernG = fernPlant(1401, { fronds:9, len:1.35, leaflets:10, dark:[0.08,0.18,0.05], light:[0.3,0.48,0.12] }), seasonal = [];
+    const fernBank = (x,z) => smoothstep(-0.05, 0.3, perlin(x*0.02 + 5, z*0.02)) + 0.6*smoothstep(sw(z)*3, sw(z)*1.6, Math.abs(x - sx(z)));   // dense banks on the slopes and by the stream
+    { const s2 = scatter({ geo:fernG, mat:uMat, tile:48, radius:60, per:0.06, seed:1401, place:(x,z,r) => { if (!floor(x,z) || r() > fernBank(x,z)) return null; return { y:heightAt(x,z) - 0.05, s:0.6 + r()*1.0, c:tintU(r) }; } }); sc.push(s2); seasonal.push(s2); }
+    // understorey shrubs: evergreen holly in the shade, hazel coppice at the edges of clearings
+    const hollyMat = leafy({ wind:0.015, back:0.5, map:atlas('holly', 55, { hue:0.31, sat:0.5, light:0.16, len:[40,58], width:0.5, count:[12,16], twig:'#3e3424', tip:0.9 }), roughness:0.35 }, false);
+    const hazelMat = leafy({ wind:0.02, back:0.9, map:atlas('hazel', 54, { hue:0.24, sat:0.5, light:0.26, len:[55,85], width:0.6, count:[10,14], twig:'#5e4a34' }), roughness:0.7 }, true);
+    const shrub = (geo, mat, seed, per, test) => scatter({ geo, mat, tile:48, radius:110, per, seed, shadow:false, place:(x,z,r) => { if (!floor(x,z) || !test(x, z, r)) return null; return { y:heightAt(x,z) - 0.1, s:0.75 + r()*0.7, c:new THREE.Color(0.85 + r()*0.3, 0.88 + r()*0.25, 0.85 + r()*0.25) }; } });
+    sc.push(shrub(forestBushGeo(1406, { stems:5, h:2.6, r:0.05, cards:44, from:0.15, spread:1.0, card:0.9 }), hollyMat, 1406, 0.0035, (x,z,r) => coverAt(x,z) > 0.55 && r() < 0.8));
+    { const s2 = shrub(forestBushGeo(1407, { stems:7, h:4.2, r:0.05, cards:40, from:0.4, spread:1.3, card:1.1 }), hazelMat, 1407, 0.004, (x,z,r) => { const gl = glade(x,z); return (gl > 0.12 && gl < 0.4) || r() < 0.25; }); sc.push(s2); }
+    const ivy = broadleafPlant(1403, { leaves:7, len:0.45, dark:[0.04,0.13,0.04], light:[0.14,0.3,0.08] });
+    { const s2 = scatter({ geo:ivy, mat:uMat, tile:48, radius:45, per:0.06, seed:1403, place:(x,z,r) => { if (!floor(x,z)) return null; return { y:heightAt(x,z) + 0.01, s:0.7 + r()*0.8, c:tintU(r) }; } }); sc.push(s2); seasonal.push(s2); }
+    const grass = bladeClump({ blades:11, seg:3, h:[0.3,0.75], w:0.03, spread:0.25, bend:0.7, colA:lin(0.14,0.24,0.06), colB:lin(0.5,0.6,0.22), seed:1404 });
+    { const s2 = scatter({ geo:grass, mat:plantMat({ wind:0.08, back:0.9 }), tile:48, radius:65, per:0.6, seed:1404, place:(x,z,r) => { const gl = glade(x,z); if (!floor(x,z) || gl < 0.28 + 0.1*r()) return null; return { y:heightAt(x,z) - 0.03, s:0.7 + r()*0.8, c:new THREE.Color(0.9 + r()*0.2, 0.92 + r()*0.15, 0.85 + r()*0.2) }; } }); sc.push(s2); seasonal.push(s2); }
+    const sedge = bladeClump({ blades:16, seg:4, h:[0.5,1.1], w:0.025, spread:0.22, bend:0.9, colA:lin(0.12,0.2,0.06), colB:lin(0.42,0.5,0.18), seed:1405 });
+    { const s2 = scatter({ geo:sedge, mat:plantMat({ wind:0.1, back:0.8 }), tile:48, radius:70, per:0.35, seed:1405, place:(x,z,r) => { const d = Math.abs(x - sx(z)), w = sw(z); if (d < w*0.92 || d > w*2.3 || r() > 0.8) return null;
+      return { y:Math.max(heightAt(x,z), -0.1) - 0.03, s:0.7 + r()*0.8, c:new THREE.Color(0.85 + r()*0.3, 0.9 + r()*0.2, 0.8 + r()*0.2) }; } }); sc.push(s2); seasonal.push(s2); }
+    const spring = [];
+    [[[0.45,0.5,1.0],[0.7,0.75,1.0], 0.0], [[1.0,1.0,0.96],[1.0,0.95,0.6], 0.25]].forEach(([p, c, th], i) => { const s2 = scatter({ geo:flowerGeo(1410 + i, lin(...p), lin(...c)), mat:plantMat({ wind:0.05, back:0.7 }), tile:48, radius:50, per:0.16, seed:1410 + i,
+      place:(x,z,r) => { if (!floor(x,z) || perlin(x*0.02 + i*9, z*0.02) < th) return null; return { y:heightAt(x,z) - 0.02, s:0.8 + r()*0.6 }; } }); sc.push(s2); spring.push(s2); });
+    const mushMat = plantMat({ wind:0, back:0.25, roughness:0.6 });
+    const mixG = owned(mergeGeometries([forestMushroomGeo(1422, 1), forestMushroomGeo(1423, 2).translate(0.45, 0, 0.2)]));
+    [forestMushroomGeo(1421, 0), mixG].forEach((g, i) => sc.push(scatter({ geo:g, mat:mushMat, tile:48, radius:40, per:0.08, seed:1421 + i,
+      place:(x,z,r) => { if (!floor(x,z)) return null; const nl = nearLog(x, z), ne = elders.reduce((b, E) => Math.min(b, Math.hypot(x - E.x, z - E.z) - E.r), 1e9);
+        const ok = nl < 1.6 || (ne > 0 && ne < 9) || perlin(x*0.06 + i*3, z*0.06) > 0.38; if (!ok || r() > (i === 0 ? 0.3 : 0.75)) return null; return { y:heightAt(x,z) - 0.02, s:0.9 + r()*1.3 }; } })));
+    const mossMat = plantMat({ wind:0, back:0, rock:true, map:tex.ground, roughness:0.95 });
+    [boulderGeo(1431, 3)].forEach((g, i) => sc.push(scatter({ geo:g, mat:mossMat, tile:48, radius:120, per:0.003, seed:1431 + i, shadow:true, place:(x,z,r) => {
+      const d = Math.abs(x - sx(z)), w = sw(z); if (r() > (d < w*2.4 ? 1 : 0.35)) return null; const s = 0.4 + r()*r()*2.2; return { y:heightAt(x,z) - s*0.3, s, sy:s*(0.55 + r()*0.45), c:new THREE.Color(0.5 + r()*0.2, 0.72 + r()*0.2, 0.42 + r()*0.15) }; } })));
+    sc.forEach(o => group.add(o.group));
+
+    // ---- Light: shafts through gaps in the canopy (as in the Amazon), mist over the stream, autumn leaf fall
+    const shaftMat = new THREE.ShaderMaterial({ transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, side:THREE.DoubleSide, fog:false,
+      uniforms:{ uSunDir:VU.uSunDir, uCol:{ value:new THREE.Color(1.0,0.84,0.55) }, uInt:{ value:0 }, uT:WIND },
+      vertexShader:`
+        #include <common>
+        #include <logdepthbuf_pars_vertex>
+        uniform vec3 uSunDir; varying vec2 vUv; varying float vSeed;
+        void main(){
+          vec3 ip = instanceMatrix[3].xyz;
+          vec2 off = mod(ip.xz - cameraPosition.xz + 120.0, 240.0) - 120.0;
+          vec3 centre = vec3(cameraPosition.x + off.x, cameraPosition.y + ip.y, cameraPosition.z + off.y);
+          vec3 axis = normalize(-uSunDir);
+          float W = length(instanceMatrix[0].xyz), L = length(instanceMatrix[1].xyz);
+          vec3 side = normalize(cross(axis, normalize(cameraPosition - centre)));
+          vec3 wp = centre + side*position.x*W + axis*(position.y + 0.5)*L;
+          vUv = uv; vSeed = fract(sin(dot(ip.xz, vec2(12.9898, 78.233)))*43758.5453);
+          gl_Position = projectionMatrix * viewMatrix * vec4(wp, 1.0);
+          #include <logdepthbuf_vertex>
+        }`,
+      fragmentShader:`
+        #include <common>
+        #include <logdepthbuf_pars_fragment>
+        uniform vec3 uCol; uniform float uInt; uniform vec2 uT; varying vec2 vUv; varying float vSeed;
+        void main(){
+          #include <logdepthbuf_fragment>
+          float e = 1.0 - abs(vUv.x*2.0 - 1.0); e = e*e*(3.0 - 2.0*e);
+          float f = smoothstep(0.0, 0.18, vUv.y) * (1.0 - smoothstep(0.55, 1.0, vUv.y));
+          float n = 0.65 + 0.35*sin(vSeed*40.0 + uT.x*0.25 + vUv.y*5.0);
+          gl_FragColor = vec4(uCol * e * f * n * uInt, 1.0);
+        }` });
+    const shafts = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), shaftMat, 70);
+    for (let i=0;i<70;i++){ const W = 1.8 + R()*5; sd.position.set((R() - 0.5)*240, 22 + R()*8 - 26, (R() - 0.5)*240); sd.quaternion.identity(); sd.scale.set(W, 24 + R()*14, 1); sd.updateMatrix(); shafts.setMatrixAt(i, sd.matrix); }
+    shafts.frustumCulled = false; shafts.renderOrder = 2; group.add(shafts);
+    const mist = [];
+    for (const y of [3.2, 7.5]){ const mt = tex.cloud.clone(); mt.userData = {}; mt.repeat.set(4, 4); mt.needsUpdate = true;
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(2400, 2400), new THREE.MeshBasicMaterial({ map:mt, transparent:true, opacity:y < 5 ? 0.1 : 0.06, depthWrite:false }));
+      m.rotation.x = -Math.PI/2; m.position.set(0, y, CZ); group.add(m); mist.push(m); }
+    const NL = 1800, lfPos = new Float32Array(NL*3), lfCol = new Float32Array(NL*3), lfSeed = [];
+    for (let i=0;i<NL;i++){ lfSeed.push([R()*70, R()*30, R()*70, R()*TAU, 0.5 + R()*0.6]); const c = [lin(0.8,0.3,0.05), lin(0.85,0.6,0.12), lin(0.6,0.15,0.05), lin(0.5,0.35,0.15)][(R()*4)|0]; lfCol.set(c, i*3); }
+    const lfGeo = new THREE.BufferGeometry(); lfGeo.setAttribute('position', new THREE.BufferAttribute(lfPos, 3)); lfGeo.setAttribute('color', new THREE.BufferAttribute(lfCol, 3)); owned(lfGeo);
+    const leavesFall = new THREE.Points(lfGeo, new THREE.PointsMaterial({ map:tex.flake, size:0.09, vertexColors:true, transparent:true, opacity:0, depthWrite:false, alphaTest:0.05 }));
+    leavesFall.frustumCulled = false; group.add(leavesFall);
+
+    // ---- Rooks wheeling over the canopy
+    const birdM = new THREE.InstancedMesh(gullGeo(), critterMat('wing'), 26), birdD = [], dm = new THREE.Object3D();
+    for (let i=0;i<26;i++){ birdD.push({ cx:(R() - 0.5)*600, cz:CZ + 200 + (R() - 0.5)*600, rad:40 + R()*120, w:(0.12 + R()*0.1)*(R() < 0.5 ? -1 : 1), a:R()*TAU, h:62 + R()*40, ph:R()*10 }); birdM.setColorAt(i, new THREE.Color(0.06, 0.06, 0.07)); }
+    birdM.frustumCulled = false; group.add(birdM);
+
+    // ---- Seasons: targets for the foliage shader, litter, ground cover, temperature; eased in update()
+    const C = (r, g, b) => new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace);
+    const SEASONS = {
+      spring:{ v:[0, 0.12, 0.85, 0], litA:C(0.24,0.26,0.1), litB:C(0.32,0.24,0.13), litK:0.4, plant:C(0.95,1.12,0.82), temp:-1, fall:0 },
+      summer:{ v:[0, 0, 0, 0], litA:C(0.22,0.17,0.1), litB:C(0.28,0.21,0.11), litK:0.35, plant:C(1,1,1), temp:7, fall:0 },
+      autumn:{ v:[1, 0.3, 0, 0], litA:C(0.52,0.22,0.08), litB:C(0.66,0.45,0.15), litK:0.95, plant:C(1.2,0.88,0.5), temp:-3, fall:1 },
+      winter:{ v:[0.55, 0.9, 0, 0.12], litA:C(0.26,0.16,0.09), litB:C(0.32,0.24,0.15), litK:0.7, plant:C(0.78,0.6,0.42), temp:-17, fall:0 } };
+    const cur = { v:new THREE.Vector4(...SEASONS.autumn.v), litA:SEASONS.autumn.litA.clone(), litB:SEASONS.autumn.litB.clone(), litK:0.95, plant:SEASONS.autumn.plant.clone(), temp:-3, fall:1, snow:0 }, tv = new THREE.Vector4();
+    let season = 'autumn', snapNext = true, light = { sun:0, amb:0 };
+    const snowPrecip = { kind:'snow', color:0xffffff, size:0.09, fall:1.0, sway:0.9, base:0.12, storm:0.9, rainLines:false, lightning:false };
+    const lab = { spring:'Spring', summer:'Summer', autumn:'Autumn', winter:'Winter' };
+
+    const world = { group, heightAt,
+      materialAt:(x,z) => { if (ground0(x,z) < 0.15) return 'water'; if (Math.abs(x - sx(z)) < sw(z)*1.6) return 'soil'; return nearLog(x, z, 0.3) < 0 ? 'wood' : 'organic'; },
+      setOption(key, v){ if (key === 'season' && SEASONS[v]){ season = v; } },
+      status(){ const g = heightAt(S.pos.x, S.pos.z); return `${lab[season]} · ${S.pos.y - g > 34 ? 'above the canopy' : `canopy ${Math.round(light.amb*100)}%`}${felled ? ` · ${felled} saplings felled` : ''}`; },
+      onImpact(el, p, r){ if (el !== 'force' && el !== 'storm') return;
+        for (const s of saps){ const dx = s.x - p.x, dz = s.z - p.z, d = Math.hypot(dx, dz); if (s.falling || d > r + 3) continue;
+          s.falling = true; s.ax = dx/(d || 1); s.az = dz/(d || 1); if (!d){ s.ax = 1; s.az = 0; } s.delay = d*0.04 + R()*0.15; s.w = 0.4 + (r + 3 - d)*0.15; falling.push(s); felled++; } },
+      update(dt, env){
+        // seasons ease over a few seconds
+        const T2 = SEASONS[season], ka = snapNext ? 1 : Math.min(1, dt*0.5); snapNext = false;
+        tv.set(...T2.v); cur.v.lerp(tv, ka); VU.uSeason.value.copy(cur.v);
+        cur.litA.lerp(T2.litA, ka); cur.litB.lerp(T2.litB, ka); cur.litK += (T2.litK - cur.litK)*ka; cur.plant.lerp(T2.plant, ka); cur.temp += (T2.temp - cur.temp)*ka; cur.fall += (T2.fall - cur.fall)*ka;
+        LIT.uLitA.value.copy(cur.litA); LIT.uLitB.value.copy(cur.litB); LIT.uLitK.value = cur.litK;
+        world.tempOffset = cur.temp;
+        for (const s2 of seasonal){ const m = s2.group.children[0]; if (m) m.material.color.copy(cur.plant); }
+        spring.forEach(s2 => s2.group.visible = season === 'spring');
+        world.precip = season === 'winter' ? snowPrecip : undefined;
+        if (season === 'winter') SURF.amb.snow = Math.max(SURF.amb.snow, 0.5*smoothstep(0.6, 0.9, cur.v.y));
+        // canopy occlusion: cover over the viewer shades the sky light, cover toward the sun dims direct light
+        const g = heightAt(S.pos.x, S.pos.z), under = 1 - smoothstep(20, 36, S.pos.y - g), leaf = 1 - 0.85*cur.v.y;
+        let cs = coverAt(S.pos.x, S.pos.z); const sdv = env.sunDir;
+        if (sdv.y > 0.04){ const t = Math.max(0, g + 24 - S.pos.y)/sdv.y; cs = coverAt(S.pos.x + sdv.x*Math.min(t, 300), S.pos.z + sdv.z*Math.min(t, 300)); }
+        const ka2 = Math.min(1, dt*1.5); light.sun += (cs*leaf*under - light.sun)*ka2; light.amb += (coverAt(S.pos.x, S.pos.z)*leaf*under - light.amb)*ka2;
+        const sk = 1 - 0.7*light.sun, hk = 1 - 0.5*light.amb;
+        sun.intensity *= sk; VU.uSunCol.value.multiplyScalar(sk);
+        hemi.intensity *= hk; hemi.color.lerp(_c2.setRGB(0.62, 0.95, 0.5), 0.55*light.amb);
+        VU.uHemiSky.value.copy(hemi.color).multiplyScalar(hemi.intensity); VU.uHemiGround.value.copy(hemi.groundColor).multiplyScalar(hemi.intensity);
+        renderer.toneMappingExposure *= 1 + 0.5*light.amb;
+        world.fogTint = world.fogTint || new THREE.Color(); world.fogTint.setRGB(0.1, 0.16, 0.08).multiplyScalar(0.3 + 0.7*env.day); world.fogTint.k = 0.35*light.amb;
+        shaftMat.uniforms.uInt.value = 0.24*smoothstep(0.04, 0.3, S.sun[1])*(1 - S.wx[1])*(1 - smoothstep(1.2, 3.5, S.wx[0]))*smoothstep(0.25, 0.7, light.amb)*(1 - 0.6*cur.v.y)*under;
+        mist.forEach((m, i) => { m.material.map.offset.x += dt*0.0012*(i + 1); m.material.color.copy(scene.fog.color); });
+        // leaf fall around the viewer
+        const lp = lfGeo.attributes.position.array, wd = env.wind;
+        for (let i=0;i<NL;i++){ const e = lfSeed[i], tt = env.time*e[4];
+          lp[i*3] = S.pos.x - 35 + wrap(e[0] - S.pos.x + Math.sin(tt*1.7 + e[3])*1.2 + wd[0]*env.time*0.25, 70);
+          lp[i*3+1] = S.pos.y - 12 + wrap(e[1] - S.pos.y - env.time*0.9*e[4], 30);
+          lp[i*3+2] = S.pos.z - 35 + wrap(e[2] - S.pos.z + Math.cos(tt*1.3 + e[3])*1.2 + wd[1]*env.time*0.25, 70); }
+        lfGeo.attributes.position.needsUpdate = true; leavesFall.material.opacity = cur.fall*(1 - 0.6*env.rain)*(0.95 - 0.5*smoothstep(25, 45, S.pos.y - g));
+        // saplings: show near bins, animate the ones toppling
+        for (const m of sapMeshes) m.visible = Math.hypot(m.userData.c.x - S.pos.x, m.userData.c.z - S.pos.z) < 330;
+        for (let i=falling.length-1;i>=0;i--){ const s = falling[i]; if ((s.delay -= dt) > 0) continue;
+          s.w += 3.2*Math.sin(s.th + 0.15)*dt; s.th += s.w*dt; if (s.th > 1.42){ s.th = 1.42; s.w *= -0.25; if (Math.abs(s.w) < 0.05){ s.w = 0; falling.splice(i, 1); } }
+          poseSap(s); }
+        birdD.forEach((b2, i) => { const th = b2.a + b2.w*env.time; dm.position.set(b2.cx + Math.cos(th)*b2.rad, b2.h + 3*Math.sin(env.time*0.5 + b2.ph), b2.cz + Math.sin(th)*b2.rad);
+          dm.rotation.set(0, -th + (b2.w > 0 ? 0 : Math.PI), (b2.w > 0 ? -1 : 1)*0.3); dm.scale.setScalar(0.9); dm.updateMatrix(); birdM.setMatrixAt(i, dm.matrix); });
+        birdM.instanceMatrix.needsUpdate = true;
+      } };
+    return world;
+  }
+});
+
 /* ============================== TAIGA ============================== */
 /* Spruce needle sprays: a 2x2 atlas of branchlets carrying short needle strokes; the lower two cells are snow-laden */
 function taigaNeedleAtlas(){
