@@ -354,13 +354,13 @@ function makeTerrain({ size, seg, height, color, kind, cx=0, cz=0, repeat, detai
   for (let i=0;i<uv.count;i++) uv.setXY(i, uv.getX(i)*rep, uv.getY(i)*rep);
   const m = new THREE.Mesh(g, terrainMaterial(detail));
   m.receiveShadow = true; m.castShadow = true;
-  if (apron) m.add(makeApron({ size, cx, cz, height, color, kind, mat:m.material, ...apron }));
+  if (apron) m.add(makeApron({ inner:size, cx, cz, height, color, kind, mat:m.material, ...apron }));
   return m;
 }
 /* Horizon apron: a coarse ring from the edge of the detailed tile out to the horizon, sampled from the same
    height and colour functions (plus an optional lift, e.g. a canopy surface) and sunk 1.5 m under the tile so
    the two never fight. Triangles fully inside the tile are dropped, so the apron costs only the ring. */
-function makeApron({ size:inner, cx, cz, height, color, kind, mat, size=9000, seg=150, lift, tint }){
+function makeApron({ inner, cx, cz, height, color, kind, mat, size=9000, seg=150, lift, tint }){
   const g = new THREE.PlaneGeometry(size, size, seg, seg); g.rotateX(-Math.PI/2); g.translate(cx, 0, cz);
   const p = g.attributes.position, cell = size/seg, hin = inner/2 - cell*1.5;
   for (let i=0;i<p.count;i++){ const x = p.getX(i), z = p.getZ(i); p.setY(i, height(x, z) + (lift ? lift(x, z) : 0) - 1.5); }
