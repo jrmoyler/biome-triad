@@ -290,7 +290,7 @@ function terrainMaterial(d = {}){
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         roughnessFactor = mix(roughnessFactor, 0.32, wet*0.85);
         roughnessFactor = mix(roughnessFactor, 0.3, ice);
-        roughnessFactor = mix(roughnessFactor, 0.42, sWet*0.8); roughnessFactor = mix(roughnessFactor, 0.12, sIce); roughnessFactor = mix(roughnessFactor, 0.85, sSnow);`)
+        roughnessFactor = mix(roughnessFactor, 0.55, min(sWet, 0.6)); roughnessFactor = mix(roughnessFactor, 0.12, sIce); roughnessFactor = mix(roughnessFactor, 0.85, sSnow);`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         if (uTF.y > 0.0 && hot > 0.0){   // cooling lava crust: glowing cracks between dark plates
           vec2 q = twp*0.21 + vec2(tvn(twp*0.03), tvn(twp*0.03 + 7.0))*3.0;
@@ -1641,7 +1641,7 @@ const fireFX = (() => {
         float a = smoothstep(0.75, 0.15, body)*smoothstep(0.0, 0.1, vUv.y);
         if (a < 0.01) discard;
         vec3 col = mix(vec3(1.0, 0.16, 0.02), vec3(1.0, 0.72, 0.28), smoothstep(0.3, 0.95, a)*(1.0 - vUv.y*0.6));
-        gl_FragColor = vec4(col*a*(1.4 + 1.8*vK), 1.0);
+        gl_FragColor = vec4(col*a*(0.6 + 0.9*vK), 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }` });
@@ -1654,7 +1654,7 @@ const fireFX = (() => {
     refresh(cells){
       const cs = SURF.cs, base = smoke.geometry.attributes.aBase, sm = smoke.material.uniforms; let n = 0, lx = 0, ly = 0, lz = 0, lw = 0;
       cells.sort((a, b) => Math.hypot(a.x - S.pos.x, a.z - S.pos.z) - Math.hypot(b.x - S.pos.x, b.z - S.pos.z));
-      for (const c of cells){ const k = clamp(c.burn*(0.4 + c.flammability), 0, 0.999), per = c.flammability > 0.3 ? 3 : 1;
+      for (const c of cells){ const k = clamp(c.burn*(0.4 + c.flammability), 0, 0.999), per = c.flammability > 0.3 ? 2 : 1;
         for (let q=0;q<per && n<900;q++){ const h1 = hashF(c.x + q*1.7, c.z), h2 = hashF(c.z - q*2.3, c.x + 5), x = c.x + (h1 - 0.5)*cs*0.9, z = c.z + (h2 - 0.5)*cs*0.9;
           F[n*4] = x; F[n*4+1] = active.heightAt(x, z) - 0.2; F[n*4+2] = z; F[n*4+3] = Math.floor(h1*996) + k*(0.7 + 0.3*h2); n++; }
         const d = Math.hypot(c.x - S.pos.x, c.z - S.pos.z), w = k/(1 + d*d*0.002); lx += c.x*w; lz += c.z*w; lw += w; }
@@ -1733,7 +1733,7 @@ function surfaceFrame(dt, env){
 }
 function surfaceStatus(){
   const st = SURF.stats, out = [];
-  if (st.burning) out.push(`Fire: ${Math.round(st.burning*SURF.cs*SURF.cs)} m² burning`);
+  if (st.burning && !active.ownsFireStatus) out.push(`Fire: ${Math.round(st.burning*SURF.cs*SURF.cs)} m² burning`);
   else if (st.scorched > 3) out.push(`${Math.round(st.scorched*SURF.cs*SURF.cs)} m² scorched`);
   if (Math.abs(SURF.temp) < 80) out.push(`${Math.round(SURF.temp)} °C`);
   return out.join(' · ');
