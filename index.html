@@ -7379,6 +7379,1020 @@ Helios.registerBiome({
   }
 });
 
+/* ============================== VILLAGE ============================== */
+/* A walled farming village on a knoll in a river valley. Strip fields, hedgerows and dry-stone walls run down to a
+   stream with a stone bridge and a watermill pond; pens, kilns and a post windmill sit outside the curtain wall.
+   Buildings come from a module kit (plinth, stone, cob, board or timber-framed walls cut by doors and windows, jettied
+   upper storeys, thatch or tile gable and hip roofs, chimneys, porches, outshuts) laid out along the lanes and merged per
+   material. Five are enterable (floorAt/ceilingAt give their floors, stairs and ceilings). Villagers keep a daily
+   schedule over the road graph; fences, carts, crates, bales, hedges and walls are destructible cover. */
+const VIL = { cx:0, cz:-230, rx:112, rz:98 };
+const vilStreamZ = x => -58 + 22*Math.sin(x*0.0052 + 0.6) + 9*Math.sin(x*0.013 + 2.1);
+const vilPondK = x => Math.exp(-(((x + 178)/40)**2));
+const vilWallD = (x, z) => Math.hypot((x - VIL.cx)/VIL.rx, (z - VIL.cz)/VIL.rz);
+function vilBase(x, z){
+  const r = Math.hypot(x*0.85, z + 120);
+  let h = 3.2 + 1.3*fbm(x*0.008, z*0.008, 3) + 64*smoothstep(640, 1500, r)*(0.75 + 0.5*fbm(x*0.0016 + 3, z*0.0016, 4)) + 10*smoothstep(260, 900, r)*(0.5 + fbm(x*0.003 + 7, z*0.003, 3));
+  h += 8.5*Math.exp(-(x*x/(165*165) + (z - VIL.cz)**2/(150*150)));   // the village knoll
+  h += 14*Math.exp(-((x - 300)**2 + (z + 470)**2)/(95*95));           // windmill hill
+  return h;
+}
+function vilHeight(x, z){
+  const h = vilBase(x, z), sz = vilStreamZ(x), w = 5.5 + 19*vilPondK(x), sd = Math.abs(z - sz);
+  return sd < w + 15 ? lerp(-1.8 - 0.8*vilPondK(x), h, smoothstep(w*0.45, w + 15, sd)) : h;
+}
+/* Stone bridge where the south road crosses the stream: a humped deck over one arch */
+const VIL_BR = (() => { const bz = vilStreamZ(0), z0 = bz - 17, z1 = bz + 17, g0 = vilHeight(0, z0), g1 = vilHeight(0, z1);
+  return { x:0, hw:2.9, bz, z0, z1, deck:z => { const u = clamp((z - z0)/(z1 - z0), 0, 1); return lerp(g0, g1, u) + 0.15 + 1.7*Math.sin(Math.PI*u); },
+    arch:z => Math.abs(z - bz) < 5.5 ? 0.35 + 2.7*Math.sqrt(1 - ((z - bz)/5.5)**2) : -3 }; })();
+const vilOnBridge = (x, z) => Math.abs(x - VIL_BR.x) < VIL_BR.hw && z > VIL_BR.z0 && z < VIL_BR.z1;
+const vilWalkY = (x, z) => vilOnBridge(x, z) ? Math.max(vilHeight(x, z), VIL_BR.deck(z)) : vilHeight(x, z);
+
+function vilSpline(pts, step){
+  const out = [], n = pts.length, P = i => pts[clamp(i, 0, n - 1)];
+  for (let i=0;i<n-1;i++){ const p0 = P(i-1), p1 = P(i), p2 = P(i+1), p3 = P(i+2), m = Math.max(1, Math.ceil(Math.hypot(p2[0] - p1[0], p2[1] - p1[1])/step));
+    for (let k=0;k<m;k++){ const t = k/m, t2 = t*t, t3 = t2*t, f = (a, b, c, d) => 0.5*(2*b + (c - a)*t + (2*a - 5*b + 4*c - d)*t2 + (3*b - a - 3*c + d)*t3);
+      out.push([f(p0[0], p1[0], p2[0], p3[0]), f(p0[1], p1[1], p2[1], p3[1])]); } }
+  out.push(pts[n - 1].slice()); return out;
+}
+const VIL_ROADS = (() => {
+  const ring = []; for (let i=0;i<=48;i++){ const a = i/48*TAU; ring.push([Math.cos(a)*72, VIL.cz + Math.sin(a)*64]); }
+  return [
+    { w:2.8, cob:0, pts:[[-46,1000],[-30,800],[-14,600],[0,420],[6,260],[4,120],[0,40],[0,-38],[0,-84],[0,-128]] },   // the south road, over the bridge to the gate
+    { w:2.6, cob:1, pts:[[0,-126],[0,-160],[0,-190],[0,-209]] },                                                   // main street to the market
+    { w:2.0, cob:1, pts:[[20,-244],[25,-262],[24,-284],[14,-306],[4,-322],[0,-334]] },                             // round the church to the north gate
+    { w:2.0, cob:0, pts:[[0,-334],[6,-354],[50,-392],[140,-430],[230,-452],[290,-462]] },                          // up to the windmill
+    { w:2.0, cob:1, pts:ring, ring:true },                                                                          // the ring lane
+    { w:2.0, cob:0, pts:[[0,-84],[42,-98],[96,-120],[140,-152],[158,-192],[164,-236],[158,-290]] },                // east lane to the pens
+    { w:2.0, cob:0, pts:[[0,-84],[-50,-98],[-108,-110],[-150,-122],[-200,-128],[-262,-146],[-330,-190]] },          // west lane past the mill
+    { w:1.8, cob:0, pts:[[-620,178],[-300,172],[0,175],[300,180],[620,174]] },                                       // field tracks
+    { w:1.8, cob:0, pts:[[-620,468],[-300,474],[0,470],[300,466],[620,472]] },
+    { w:1.8, cob:0, pts:[[0,38],[46,30],[92,28]] }, { w:1.8, cob:0, pts:[[0,38],[-46,30],[-92,28]] }
+  ].map(r => ({ ...r, path:vilSpline(r.pts, 6) }));
+})();
+const VIL_SQ = { x0:-24, x1:24, z0:-246, z1:-208 };
+const VIL_G = { x0:-820, z0:-1020, cs:2, n:820 };
+const vilIdx = (x, z) => { const i = Math.floor((x - VIL_G.x0)/VIL_G.cs), j = Math.floor((z - VIL_G.z0)/VIL_G.cs); return (i < 0 || j < 0 || i >= VIL_G.n || j >= VIL_G.n) ? -1 : j*VIL_G.n + i; };
+const vilSouthX = z => { const p = VIL_ROADS[0].path; for (let i=1;i<p.length;i++) if (p[i][1] <= z){ const a = p[i-1], b = p[i], t = (z - a[1])/((b[1] - a[1]) || 1); return lerp(a[0], b[0], t); } return 0; };
+const VIL_PENS = [ { kind:'sheep', x0:140, x1:198, z0:-204, z1:-168, gate:'w' }, { kind:'cow', x0:140, x1:224, z0:-300, z1:-214, gate:'w' }, { kind:'pig', x0:-102, x1:-84, z0:24, z1:40, gate:'e' } ];
+const VIL_MILL = (() => { const x = -178, zc = vilStreamZ(x); let z = zc; while (z > zc - 60 && vilHeight(x, z) < 0.25) z -= 0.5; return { x, zb:z }; })();
+const VIL_WMILL = { x:300, z:-470 };
+const VIL_KILNS = [[236,-346],[250,-332]];
+function vilFieldCalc(x, z){
+  let blk;
+  if (z > 50 && z < 640 && Math.abs(x) < 600){ const B = [50,175,320,470,640]; for (blk=0;blk<4;blk++) if (z < B[blk + 1]) break; }
+  else if (z > -128 && z < vilStreamZ(x) - 24 && Math.abs(x) > 9 && Math.abs(x) < 600 && vilWallD(x, z) > 1.14) blk = 10 + (x > 0 ? 1 : 0);
+  else if (z < -150 && z > -620 && Math.abs(x) > 150 && Math.abs(x) < 600) blk = 4 + (x > 0 ? 3 : 0) + (z < -480 ? 2 : z < -330 ? 1 : 0);
+  else return 0;
+  if (Math.hypot(x*0.85, z + 120) > 690 || Math.hypot(x - VIL_WMILL.x, z - VIL_WMILL.z) < 85) return 0;
+  if (x > 120 && x < 236 && z > -312 && z < -156) return 0;
+  if (x > -280 && x < -140 && z > -345 && z < -185) return 0;   // the orchard
+  if (Math.hypot(x - VIL_MILL.x, z - VIL_MILL.zb) < 55 || Math.hypot(x - 243, z + 339) < 30) return 0;
+  const sw = 15 + 8*hash2(blk*3.1, 7.7), q = (x + 2000)/sw, si = Math.floor(q), u = q - si;
+  if (u < 0.04 || u > 0.96) return 0;   // grass baulk between strips
+  const crops = [1,1,1,2,2,3,3,4,5,5,6];
+  return crops[Math.floor(hash2(si*1.37 + blk*11.3, blk*5.1)*crops.length)];
+}
+/* ---------- Module kit: boxes, quads and lathes merged per material slot, in building-local frames ---------- */
+const VIL_SLOTS = ['stone','plaster','timber','wood','thatch','tile','glass','cloth','iron','ember'];
+const vilSlots = () => Object.fromEntries(VIL_SLOTS.map(k => [k, { P:[], N:[], U:[], C:[], B:[], I:[] }]));
+const vilFrame = (x, y, z, ry) => ({ x, y, z, ry, c:Math.cos(ry), s:Math.sin(ry) });
+const vilSub = (F, lx, ly, lz, dry = 0) => vilFrame(F.x + lx*F.c + lz*F.s, F.y + ly, F.z - lx*F.s + lz*F.c, F.ry + dry);
+const _vbm = new THREE.Matrix4(), _vq = new THREE.Quaternion(), _ve = new THREE.Euler(), _vp = new THREE.Vector3(), _vs = new THREE.Vector3(), _vv = new THREE.Vector3(), _vn = new THREE.Vector3(), _vm3 = new THREE.Matrix3();
+function vilVert(S, F, lx, ly, lz, nx, ny, nz, u, v, col, bid){
+  S.P.push(F.x + lx*F.c + lz*F.s, F.y + ly, F.z - lx*F.s + lz*F.c); S.N.push(nx*F.c + nz*F.s, ny, -nx*F.s + nz*F.c); S.U.push(u, v); S.C.push(col[0], col[1], col[2]); S.B.push(bid);
+}
+function vilGeo(S, F, geo, px, py, pz, sx, sy, sz, col, rx = 0, ry = 0, rz = 0, us = 2.4, bid = 0){
+  _vbm.compose(_vp.set(px, py, pz), _vq.setFromEuler(_ve.set(rx, ry, rz)), _vs.set(sx, sy, sz)); _vm3.getNormalMatrix(_vbm);
+  const p = geo.attributes.position, n = geo.attributes.normal, base = S.P.length/3;
+  for (let i=0;i<p.count;i++){ _vv.fromBufferAttribute(p, i).applyMatrix4(_vbm); _vn.fromBufferAttribute(n, i).applyMatrix3(_vm3).normalize();
+    const ax = Math.abs(_vn.x), ay = Math.abs(_vn.y), az = Math.abs(_vn.z);
+    const u = ay > ax && ay > az ? _vv.x : ax > az ? _vv.z : _vv.x, v = ay > ax && ay > az ? _vv.z : _vv.y;
+    vilVert(S, F, _vv.x, _vv.y, _vv.z, _vn.x, _vn.y, _vn.z, u/us, v/us, col, bid); }
+  const ix = geo.index; if (ix) for (let i=0;i<ix.count;i++) S.I.push(base + ix.getX(i)); else for (let i=0;i<p.count;i++) S.I.push(base + i);
+}
+function vilQuad(S, F, a, b, c, d, col, us = 1, vs = 1, bid = 0){
+  const e1 = [b[0]-a[0], b[1]-a[1], b[2]-a[2]], e2 = [d[0]-a[0], d[1]-a[1], d[2]-a[2]], n = [e1[1]*e2[2] - e1[2]*e2[1], e1[2]*e2[0] - e1[0]*e2[2], e1[0]*e2[1] - e1[1]*e2[0]], l = Math.hypot(...n) || 1;
+  const lu = Math.hypot(...e1)/us, lv = Math.hypot(...e2)/vs, base = S.P.length/3;
+  [[a,0,0],[b,lu,0],[c,lu,lv],[d,0,lv]].forEach(([p, u, v]) => vilVert(S, F, p[0], p[1], p[2], n[0]/l, n[1]/l, n[2]/l, u, v, col, bid));
+  S.I.push(base, base+1, base+2, base, base+2, base+3);
+}
+function vilTri(S, F, a, b, c, col, us = 1, bid = 0){
+  const e1 = [b[0]-a[0], b[1]-a[1], b[2]-a[2]], e2 = [c[0]-a[0], c[1]-a[1], c[2]-a[2]], n = [e1[1]*e2[2] - e1[2]*e2[1], e1[2]*e2[0] - e1[0]*e2[2], e1[0]*e2[1] - e1[1]*e2[0]], l = Math.hypot(...n) || 1, base = S.P.length/3;
+  const ax = Math.abs(n[0]) > Math.abs(n[2]);
+  for (const p of [a, b, c]) vilVert(S, F, p[0], p[1], p[2], n[0]/l, n[1]/l, n[2]/l, (ax ? p[2] : p[0])/us, p[1]/us, col, bid);
+  S.I.push(base, base+1, base+2);
+}
+function vilFinish(S, withB){
+  if (!S.I.length) return null;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(S.P, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(S.N, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(S.U, 2)); g.setAttribute('color', new THREE.Float32BufferAttribute(S.C, 3));
+  if (withB) g.setAttribute('aB', new THREE.Float32BufferAttribute(S.B, 1));
+  g.setIndex(S.I); g.computeBoundingSphere(); OWNED.push(g); return g;
+}
+const VIL_U = { box:null, cyl:null, cyl6:null, cone:null, sph:null };
+function vilUnits(){ if (VIL_U.box) return VIL_U; VIL_U.box = keepG(new THREE.BoxGeometry(1, 1, 1)); VIL_U.cyl = keepG(new THREE.CylinderGeometry(0.5, 0.5, 1, 14)); VIL_U.cyl6 = keepG(new THREE.CylinderGeometry(0.5, 0.5, 1, 6));
+  VIL_U.cone = keepG(new THREE.ConeGeometry(0.5, 1, 14)); VIL_U.cone4 = keepG(new THREE.ConeGeometry(0.5, 1, 4)); VIL_U.sph = keepG(new THREE.SphereGeometry(0.5, 12, 8)); VIL_U.dome = keepG(new THREE.SphereGeometry(0.5, 14, 7, 0, TAU, 0, Math.PI/2)); return VIL_U; }
+const vilBox = (S, F, x, y, z, sx, sy, sz, col, rx = 0, ry = 0, rz = 0, us = 2.4, bid = 0) => vilGeo(S, F, VIL_U.box, x, y, z, sx, sy, sz, col, rx, ry, rz, us, bid);
+/* Box between two points in the local frame (beams, braces, rails) */
+function vilBeam(S, F, a, b, w, h, col){ const dx = b[0]-a[0], dy = b[1]-a[1], dz = b[2]-a[2], L = Math.hypot(dx, dy, dz);
+  _vq.setFromUnitVectors(_vv.set(1, 0, 0), _vn.set(dx/L, dy/L, dz/L)); _ve.setFromQuaternion(_vq);
+  vilBox(S, F, (a[0]+b[0])/2, (a[1]+b[1])/2, (a[2]+b[2])/2, L, h, w, col, _ve.x, _ve.y, _ve.z); }
+
+/* Gable or hip roof over a W x D rectangle, ridge along local x; the underside meets the wall tops at eY */
+function vilRoof(S, F, o){
+  const { W, D, eY, pitch, ov, th, hip, col, gable } = o, t = Math.tan(pitch), dn = th/Math.cos(pitch), hD = D/2 + ov, eYr = eY + dn;
+  const yR = eYr + (D/2)*t, yE = eYr - ov*t, ovg = hip ? ov : o.ovg ?? 0.35, xL = -W/2 - ovg, xR = W/2 + ovg, rx = hip ? Math.max(0.2, W/2 - D/2) : W/2 + ovg;
+  const slot = S[o.slot], ucol = col.map(v => v*0.62), us = o.us ?? 1.2;
+  if (!hip){
+    vilQuad(slot, F, [xL,yE,hD], [xR,yE,hD], [xR,yR,0], [xL,yR,0], col, us, us); vilQuad(slot, F, [xR,yE,-hD], [xL,yE,-hD], [xL,yR,0], [xR,yR,0], col, us, us);
+    vilQuad(slot, F, [xL,yE-dn,hD], [xL,yR-dn,0], [xR,yR-dn,0], [xR,yE-dn,hD], ucol, us, us); vilQuad(slot, F, [xR,yE-dn,-hD], [xR,yR-dn,0], [xL,yR-dn,0], [xL,yE-dn,-hD], ucol, us, us);
+    vilQuad(slot, F, [xR,yE-dn,hD], [xR,yR-dn,0], [xR,yR,0], [xR,yE,hD], ucol, us, us); vilQuad(slot, F, [xR,yR-dn,0], [xR,yE-dn,-hD], [xR,yE,-hD], [xR,yR,0], ucol, us, us);
+    vilQuad(slot, F, [xL,yE,hD], [xL,yR,0], [xL,yR-dn,0], [xL,yE-dn,hD], ucol, us, us); vilQuad(slot, F, [xL,yR,0], [xL,yE,-hD], [xL,yE-dn,-hD], [xL,yR-dn,0], ucol, us, us);
+    if (gable){ const gs = S[gable.slot], wt = gable.wt;   // gable end walls, outer and inner faces
+      for (const sx of [-1, 1]){ const xo = sx*W/2, xi = sx*(W/2 - wt), top = [xo, eY + (D/2)*t, 0];
+        if (sx > 0){ vilTri(gs, F, [xo,eY,D/2], [xo,eY,-D/2], top, gable.col, 2.4, o.bid); vilTri(gs, F, [xi,eY,-D/2], [xi,eY,D/2], [xi, top[1], 0], gable.col, 2.4, o.bid); }
+        else { vilTri(gs, F, [xo,eY,-D/2], [xo,eY,D/2], top, gable.col, 2.4, o.bid); vilTri(gs, F, [xi,eY,D/2], [xi,eY,-D/2], [xi, top[1], 0], gable.col, 2.4, o.bid); }
+        if (gable.timber){ const tc = gable.timber; vilBeam(S.timber, F, [xo + sx*0.06, eY + 0.02, 0], [xo + sx*0.06, top[1] - 0.25, 0], 0.16, 0.18, tc);
+          vilBeam(S.timber, F, [xo + sx*0.06, eY + (D/4)*t, -D/4], [xo + sx*0.06, eY + (D/4)*t, D/4], 0.16, 0.16, tc); } } }
+  } else {
+    const xa = W/2 + ov;
+    vilQuad(slot, F, [-xa,yE,hD], [xa,yE,hD], [rx,yR,0], [-rx,yR,0], col, us, us); vilQuad(slot, F, [xa,yE,-hD], [-xa,yE,-hD], [-rx,yR,0], [rx,yR,0], col, us, us);
+    vilTri(slot, F, [xa,yE,hD], [xa,yE,-hD], [rx,yR,0], col, us); vilTri(slot, F, [-xa,yE,-hD], [-xa,yE,hD], [-rx,yR,0], col, us);
+    vilQuad(slot, F, [-xa,yE-dn,hD], [-rx,yR-dn,0], [rx,yR-dn,0], [xa,yE-dn,hD], ucol, us, us); vilQuad(slot, F, [xa,yE-dn,-hD], [rx,yR-dn,0], [-rx,yR-dn,0], [-xa,yE-dn,-hD], ucol, us, us);
+    vilTri(slot, F, [xa,yE-dn,-hD], [xa,yE-dn,hD], [rx,yR-dn,0], ucol, us); vilTri(slot, F, [-xa,yE-dn,hD], [-xa,yE-dn,-hD], [-rx,yR-dn,0], ucol, us);
+    vilQuad(slot, F, [xa,yE-dn,hD], [xa,yE-dn,-hD], [xa,yE,-hD], [xa,yE,hD], ucol, us, us); vilQuad(slot, F, [-xa,yE-dn,-hD], [-xa,yE-dn,hD], [-xa,yE,hD], [-xa,yE,-hD], ucol, us, us);
+  }
+  const xa = hip ? W/2 + ov : xR, xb = hip ? -W/2 - ov : xL;
+  vilQuad(slot, F, [xb,yE-dn,hD], [xa,yE-dn,hD], [xa,yE,hD], [xb,yE,hD], ucol, us, us); vilQuad(slot, F, [xa,yE-dn,-hD], [xb,yE-dn,-hD], [xb,yE,-hD], [xa,yE,-hD], ucol, us, us);
+  if (o.kind === 'thatch') vilGeo(slot, F, VIL_U.cyl, 0, yR - 0.12, 0, 0.62, (hip ? rx*2 : xR - xL) + 0.2, 0.62, col.map(v => v*0.85), 0, 0, Math.PI/2);
+  else vilBox(slot, F, 0, yR + 0.04, 0, (hip ? rx*2 : xR - xL) + 0.1, 0.2, 0.36, col.map(v => v*0.8), Math.PI/4, 0, 0);
+  return { yR, eYr, t, dn };
+}
+/* Wall along one side, cut by openings [{c, w, y0, y1}]; u runs along +x (front/back) or +z (sides) */
+function vilWall(S, F, side, slot, col, W, D, y0, y1, wt, ops, bid, zf = D/2){
+  const along = side === 'f' || side === 'b', L = along ? W : D - 2*wt + (zf - D/2), u0 = along ? -W/2 : -(D/2 - wt), u1 = u0 + L;
+  const at = (u, du, ya, yb) => { if (du < 0.02 || yb - ya < 0.02) return; const uc = u + du/2, yc = (ya + yb)/2;
+    if (side === 'f') vilBox(S[slot], F, uc, yc, zf - wt/2, du, yb - ya, wt, col, 0, 0, 0, 2.4, bid);
+    else if (side === 'b') vilBox(S[slot], F, uc, yc, -D/2 + wt/2, du, yb - ya, wt, col, 0, 0, 0, 2.4, bid);
+    else vilBox(S[slot], F, (side === 'r' ? 1 : -1)*(W/2 - wt/2), yc, uc, wt, yb - ya, du, col, 0, 0, 0, 2.4, bid); };
+  let u = u0; const sorted = ops.filter(o => o.c - o.w/2 > u0 && o.c + o.w/2 < u1).sort((a, b) => a.c - b.c);
+  for (const o of sorted){ at(u, o.c - o.w/2 - u, y0, y1); at(o.c - o.w/2, o.w, y0, Math.max(y0, o.y0)); at(o.c - o.w/2, o.w, Math.min(y1, o.y1), y1); u = o.c + o.w/2; }
+  at(u, u1 - u, y0, y1);
+  return sorted;
+}
+/* Position on a wall's outer face: local [x, z] and outward normal for u along the wall */
+const vilFace = (side, u, W, D, zf = D/2) => side === 'f' ? [u, zf, 0, 1] : side === 'b' ? [u, -D/2, 0, -1] : side === 'r' ? [W/2, u, 1, 0] : [-W/2, u, -1, 0];
+
+function vilBuild(S, b){
+  const F = vilFrame(b.x, b.fy0, b.z, b.ry), W = b.W, D = b.D, wt = b.wt, H = b.H, bid = b.id;
+  if (b.enter && b.st === 2){ const run = 3.2, xs0 = -W/2 + wt + 0.04; b.stair = { xs0, xs1:xs0 + 1.0, zb:-D/2 + wt + 0.12 + run, run }; }
+  const stoneC = b.stoneC, plC = b.plC, tmC = [0.2, 0.14, 0.09], woodC = [0.42, 0.3, 0.19], glassC = [0.05, 0.06, 0.07];
+  const wallSlot = b.wall === 'stone' ? 'stone' : b.wall === 'board' ? 'wood' : 'plaster', wallC = b.wall === 'stone' ? stoneC : b.wall === 'board' ? [0.3, 0.22, 0.15] : plC;
+  // plinth and floor
+  vilBox(S.stone, F, 0, (b.gmin - b.fy0 - 0.5)/2 - 0.02, (b.jet || 0)*0, W + 0.3, b.fy0 - b.gmin + 0.5 - 0.04, D + 0.3, stoneC.map(v => v*0.8));
+  vilBox(S.wood, F, 0, -0.05, 0, W - 2*wt + 0.02, 0.1, D - 2*wt + 0.02, [0.36, 0.26, 0.17]);
+  if (b.fy0 - b.gmin > 0.45 && !b.shed){ const st = Math.ceil((b.fy0 - b.gmin)/0.3); for (let i=0;i<st;i++) vilBox(S.stone, F, b.doorU, -(i + 0.5)*0.3 + 0.0, D/2 + 0.32 + i*0.32, 1.5, 0.3, 0.34, stoneC.map(v => v*0.85)); }
+  if (b.shed){   // open shed: posts, back wall of boards and a roof
+    for (const x of [-W/2 + 0.2, 0, W/2 - 0.2]) for (const z of [-D/2 + 0.2, D/2 - 0.2]) vilBox(S.timber, F, x, H/2, z, 0.25, H, 0.25, tmC);
+    vilBox(S.wood, F, 0, H/2, -D/2 + 0.08, W, H, 0.1, [0.32, 0.23, 0.15]);
+    for (const z of [-D/2 + 0.2, D/2 - 0.2]) vilBox(S.timber, F, 0, H - 0.1, z, W, 0.22, 0.22, tmC);
+    b.roofI = vilRoof(S, F, { W, D, eY:H, pitch:b.pitch, ov:0.5, th:0.14, hip:false, col:b.roofC, slot:'tile', kind:'tile', bid, ovg:0.4 }); b.rD = D; b.rAlong = false; b.zOff = 0;
+    return;
+  }
+  // ground storey: openings
+  const door = { c:b.doorU, w:b.doorW, y0:0, y1:b.doorH }, win = (c, y0 = 0.95, h = 1.0, w = 0.9) => ({ c, w, y0, y1:y0 + h, win:true });
+  const fOps = b.open ? [] : [door], wOff = W/2 - 1.5;
+  if (!b.open){ for (const c of b.church ? [] : [-wOff, wOff, ...(W > 11 ? [-W/2 + 3.6] : [])]) if (Math.abs(c - b.doorU) > 1.6) fOps.push(win(c)); }
+  const bOps = b.church ? [-6, 0, 6].map(c => win(c, 2.2, 3.4, 1.0)) : [win(W > 9 ? -W/4 : 0)].concat(W > 9 ? [win(W/4)] : []);
+  const sideOps = s => b.church ? [] : (b.chim === s ? [] : [win(0)]);
+  const H1 = b.st === 2 ? H : b.eY;
+  const walls = { f:[], b:[], l:[], r:[] };
+  if (!b.open) walls.f = vilWall(S, F, 'f', wallSlot, wallC, W, D, 0, H1, wt, fOps, bid);
+  else { for (const x of [-W/2 + 0.2, -W/6, W/6, W/2 - 0.2]) vilBox(S.timber, F, x, H1/2, D/2 - 0.15, 0.28, H1, 0.28, tmC); vilBox(S.timber, F, 0, H1 - 0.15, D/2 - 0.15, W, 0.3, 0.3, tmC); }
+  walls.b = vilWall(S, F, 'b', wallSlot, wallC, W, D, 0, H1, wt, b.church ? [] : bOps, bid);
+  walls.l = vilWall(S, F, 'l', wallSlot, wallC, W, D, 0, H1, wt, b.church ? [-7.5, -2.5, 2.5, 7.5].map(c => win(c, 2.4, 3.4, 1.0)) : sideOps(-1), bid);
+  walls.r = vilWall(S, F, 'r', wallSlot, wallC, W, D, 0, H1, wt, b.church ? [-7.5, -2.5, 2.5, 7.5].map(c => win(c, 2.4, 3.4, 1.0)) : sideOps(1), bid);
+  const timberDress = (side, wops, ya, yb, zf) => {   // posts, rails, braces and opening frames proud of the plaster
+    const along = side === 'f' || side === 'b', L = along ? W : D - 2*wt + (zf - D/2), u0 = along ? -W/2 : -(D/2 - wt), u1 = u0 + L, k = side === 'b' || side === 'l' ? -1 : 1;
+    const P = (u, y) => side === 'f' ? [u, y, zf + 0.06] : side === 'b' ? [u, y, -D/2 - 0.06] : [k*(W/2 + 0.06), y, u];
+    const mem = (ua, ya2, ub, yb2, w = 0.17) => vilBeam(S.timber, F, P(ua, ya2), P(ub, yb2), along ? 0.18 : w, along ? w : 0.18, tmC);
+    const vert = (u, a2, b2) => side === 'f' || side === 'b' ? vilBox(S.timber, F, u, (a2 + b2)/2, P(u, 0)[2], 0.18, b2 - a2, 0.18, tmC) : vilBox(S.timber, F, P(u, 0)[0], (a2 + b2)/2, u, 0.18, b2 - a2, 0.18, tmC);
+    const hor = (ua, ub, y) => side === 'f' || side === 'b' ? vilBox(S.timber, F, (ua + ub)/2, y, P(0, 0)[2], ub - ua, 0.17, 0.18, tmC) : vilBox(S.timber, F, P(0, 0)[0], y, (ua + ub)/2, 0.18, 0.17, ub - ua, tmC);
+    hor(u0, u1, ya + 0.09); hor(u0, u1, yb - 0.09);
+    const blocked = u => wops.some(o => Math.abs(u - o.c) < o.w/2 + 0.12);
+    const posts = [u0 + 0.09, u1 - 0.09]; for (let u = u0 + 1.1; u < u1 - 0.6; u += 1.1) if (!blocked(u)) posts.push(u);
+    for (const o of wops){ posts.push(o.c - o.w/2 - 0.09, o.c + o.w/2 + 0.09); if (o.y1 < yb - 0.3) hor(o.c - o.w/2 - 0.18, o.c + o.w/2 + 0.18, o.y1 + 0.08); if (o.y0 > ya + 0.3) hor(o.c - o.w/2 - 0.18, o.c + o.w/2 + 0.18, o.y0 - 0.08); }
+    for (const u of posts) vert(u, ya + 0.17, yb - 0.17);
+    const mid = ya + (yb - ya)*0.45;   // mid rail stops at the openings
+    let ua = u0; for (const o of [...wops].sort((a, b) => a.c - b.c)){ if (o.c - o.w/2 - 0.2 - ua > 0.4) hor(ua, o.c - o.w/2 - 0.18, mid); ua = o.c + o.w/2 + 0.18; } if (u1 - ua > 0.4) hor(ua, u1, mid);
+    if (!blocked(u0 + 0.9)) mem(u0 + 0.12, ya + 0.2, u0 + 1.0, mid - 0.1); if (!blocked(u1 - 0.9)) mem(u1 - 0.12, ya + 0.2, u1 - 1.0, mid - 0.1);
+    if (!blocked(u0 + 0.9)) mem(u0 + 0.12, yb - 0.2, u0 + 1.0, mid + 0.1); if (!blocked(u1 - 0.9)) mem(u1 - 0.12, yb - 0.2, u1 - 1.0, mid + 0.1);
+  };
+  const openings = [];   // glass, frames, doors
+  const fill = (side, list, zf = D/2) => { for (const o of list){ const along = side === 'f' || side === 'b', f = vilFace(side, o.c, W, D, zf), cx = f[0] - f[2]*wt/2, cz = f[1] - f[3]*wt/2;
+    if (o.win){ const w2 = o.w, h2 = o.y1 - o.y0, yc = (o.y0 + o.y1)/2;
+      if (along) vilBox(S.glass, F, cx, yc, cz, w2, h2, 0.04, glassC, 0, 0, 0, 1, bid); else vilBox(S.glass, F, cx, yc, cz, 0.04, h2, w2, glassC, 0, 0, 0, 1, bid);
+      if (along){ vilBox(S.timber, F, cx, yc, cz, 0.07, h2, 0.1, tmC); vilBox(S.timber, F, cx, yc, cz, w2, 0.07, 0.1, tmC); vilBox(S.wood, F, cx, o.y0 - 0.05, f[1] + f[3]*0.08, w2 + 0.25, 0.1, 0.2, woodC); }
+      else { vilBox(S.timber, F, cx, yc, cz, 0.1, h2, 0.07, tmC); vilBox(S.timber, F, cx, yc, cz, 0.1, 0.07, w2, tmC); vilBox(S.wood, F, f[0] + f[2]*0.08, o.y0 - 0.05, cz, 0.2, 0.1, w2 + 0.25, woodC); }
+      if (b.shutters && along && !b.church) for (const sg of [-1, 1]) vilBox(S.wood, F, cx + sg*(w2*0.75 + 0.05), yc, f[1] + f[3]*0.07, w2*0.5, h2, 0.05, b.shutC); }
+    else if (!o.win){ const yc = (o.y0 + o.y1)/2;
+      if (b.enter){ const hx = cx - o.w/2, ang = 1.75; vilBox(S.wood, F, hx + Math.cos(ang)*o.w/2*0.98, yc, cz - Math.sin(ang)*o.w/2*0.98 - 0.0, o.w, o.y1 - o.y0, 0.07, [0.3, 0.2, 0.12], 0, ang, 0); }
+      else if (along) vilBox(S.wood, F, cx, yc, cz - f[3]*0.02, o.w, o.y1 - o.y0, 0.07, b.doorC);
+      else vilBox(S.wood, F, cx - f[2]*0.02, yc, cz, 0.07, o.y1 - o.y0, o.w, b.doorC);
+      openings.push(o); } } };
+  fill('f', walls.f); fill('b', walls.b); fill('l', walls.l); fill('r', walls.r);
+  if (b.wall === 'timber'){ timberDress('f', walls.f, 0, H1, D/2); timberDress('b', walls.b, 0, H1, D/2); timberDress('l', walls.l, 0, H1, D/2); timberDress('r', walls.r, 0, H1, D/2); }
+  if (b.wall === 'stone'){ for (const [sx, sz] of [[-1,-1],[1,-1],[-1,1],[1,1]]) vilBox(S.stone, F, sx*(W/2 - 0.2), H1/2, sz*(D/2 - 0.2), 0.5, H1, 0.5, stoneC.map(v => v*1.08)); }   // quoins
+  // upper storey (jettied over the front when timber framed)
+  let eY = b.eY, Dr = D, zOff = 0;
+  if (b.st === 2){
+    const j = b.jet, zf = D/2 + j, H2 = b.H2, ya = H, yb = H + H2, wSlot = b.upper === 'stone' ? 'stone' : 'plaster', wc = b.upper === 'stone' ? stoneC : plC;
+    const fl = [0.33, 0.24, 0.16], st = b.stair;   // floor slab, cut for the stairwell
+    if (!st) vilBox(S.wood, F, 0, H - 0.08, j/2, W - 0.02, 0.16, D + j - 0.02, fl);
+    else { const x0 = -W/2 + 0.01, x1 = W/2 - 0.01, z0 = -D/2 + 0.01, z1 = D/2 + j - 0.01, sx = st.xs1 + 0.05;
+      vilBox(S.wood, F, (sx + x1)/2, H - 0.08, (z0 + z1)/2, x1 - sx, 0.16, z1 - z0, fl); vilBox(S.wood, F, (x0 + sx)/2, H - 0.08, (st.zb + z1)/2, sx - x0, 0.16, z1 - st.zb, fl); }
+    if (j > 0) for (let x = -W/2 + 0.3; x < W/2; x += 0.6) vilBox(S.timber, F, x, H - 0.24, D/2 - 0.1 + j/2, 0.16, 0.16, j + 0.5, tmC);   // joist ends under the jetty
+    const uf = (W > 8.5 ? [-W/3, 0, W/3] : [-W/4, W/4]).map(c => win(c, ya + 0.85, 0.9, 0.8));
+    const ub = [win(0, ya + 0.85, 0.9, 0.8)];
+    const wf = vilWall(S, F, 'f', wSlot, wc, W, D, ya, yb, wt, uf, bid, zf), wb = vilWall(S, F, 'b', wSlot, wc, W, D, ya, yb, wt, ub, bid);
+    const wl = vilWall(S, F, 'l', wSlot, wc, W, D, ya, yb, wt, [], bid, zf), wr = vilWall(S, F, 'r', wSlot, wc, W, D, ya, yb, wt, [], bid, zf);
+    fill('f', wf, zf); fill('b', wb);
+    if (b.upper !== 'stone'){ timberDress('f', wf, ya, yb, zf); timberDress('b', wb, ya, yb, D/2); timberDress('l', [], ya, yb, zf); timberDress('r', [], ya, yb, zf); }
+    Dr = D + j; zOff = j/2; eY = yb;
+  }
+  // roof (ridge along the long side) with gables or hips, chimney, porch, outshut
+  const along = b.ridgeZ, RF = along ? vilSub(F, 0, 0, zOff, Math.PI/2) : vilSub(F, 0, 0, zOff), RW = along ? Dr : W, RD = along ? W : Dr;
+  const gWall = b.wall === 'stone' || b.upper === 'stone' ? { slot:'stone', col:stoneC, wt } : { slot:b.wall === 'board' ? 'wood' : 'plaster', col:b.wall === 'board' ? [0.3, 0.22, 0.15] : plC, wt, timber:b.wall === 'timber' ? tmC : null };
+  b.roofI = vilRoof(S, RF, { W:RW, D:RD, eY, pitch:b.pitch, ov:b.roof === 'thatch' ? 0.65 : 0.45, th:b.roof === 'thatch' ? 0.42 : 0.14, hip:b.hip, col:b.roofC, slot:b.roof === 'thatch' ? 'thatch' : 'tile', kind:b.roof, bid, gable:b.hip ? null : gWall, us:b.roof === 'thatch' ? 1.6 : 1.0 });
+  b.rD = RD; b.rAlong = along; b.zOff = zOff;
+  if (b.chim){ const cx = b.chim*(W/2 - wt - 0.45), top = b.roofI.yR + 1.1;
+    vilBox(S.stone, F, cx, (top - 0.3)/2 - 0.15, 0, 0.95, top + 0.3, 0.95, stoneC.map(v => v*0.9));
+    vilBox(S.stone, F, cx, top + 0.1, 0, 1.1, 0.2, 1.1, stoneC.map(v => v*0.8));
+    vilGeo(S.stone, F, VIL_U.cyl6, cx, top + 0.42, 0, 0.32, 0.45, 0.32, [0.42, 0.25, 0.18]);
+    b.smoke = [F.x + cx*F.c, F.y + top + 0.7, F.z - cx*F.s]; }
+  if (b.porch){ const pz = D/2 + 1.3, py = b.doorH + 0.55, PF = vilSub(F, b.doorU, 0, 0);
+    for (const sx of [-0.8, 0.8]) vilBox(S.timber, PF, sx, py/2, pz - 0.1, 0.16, py, 0.16, tmC);
+    vilQuad(S.tile, PF, [-1.15, py, pz + 0.25], [1.15, py, pz + 0.25], [1.15, py + 0.75, D/2], [-1.15, py + 0.75, D/2], b.roofC, 1, 1);
+    vilQuad(S.tile, PF, [-1.15, py - 0.06, pz + 0.25], [-1.15, py + 0.69, D/2], [1.15, py + 0.69, D/2], [1.15, py - 0.06, pz + 0.25], b.roofC.map(v => v*0.6), 1, 1); }
+  if (b.outshut){ const ow = W*0.55, od = 2.6, oz = -D/2 - od/2, oh = 2.4, ox = (b.chim || 1)*-W*0.18;
+    vilBox(S[wallSlot], F, ox, oh/2, oz, ow, oh, od, wallC);
+    vilQuad(S.tile, F, [ox + ow/2 + 0.3, oh + 0.05, -D/2 - od - 0.4], [ox - ow/2 - 0.3, oh + 0.05, -D/2 - od - 0.4], [ox - ow/2 - 0.3, oh + 1.0, -D/2], [ox + ow/2 + 0.3, oh + 1.0, -D/2], b.roofC, 1, 1); }
+  if (b.enter) vilInterior(S, F, b);
+}
+/* Furniture, hearth, stairs and the upper floor of an enterable building */
+function vilInterior(S, F, b){
+  const W = b.W, D = b.D, wt = b.wt, H = b.H, wood = [0.4, 0.28, 0.17], dark = [0.25, 0.17, 0.11], cloth = [0.62, 0.55, 0.42];
+  const table = (x, z, ry = 0, L = 1.8) => { const T = vilSub(F, x, 0, z, ry); vilBox(S.wood, T, 0, 0.76, 0, L, 0.07, 0.85, wood); for (const sx of [-1, 1]) for (const sz of [-1, 1]) vilBox(S.wood, T, sx*(L/2 - 0.12), 0.37, sz*0.3, 0.08, 0.74, 0.08, dark);
+    for (const sz of [-1, 1]){ vilBox(S.wood, T, 0, 0.45, sz*0.75, L*0.9, 0.06, 0.28, wood); for (const sx of [-1, 1]) vilBox(S.wood, T, sx*L*0.36, 0.22, sz*0.75, 0.06, 0.44, 0.24, dark); }
+    vilGeo(S.iron, T, VIL_U.cyl, 0.3, 0.86, 0.1, 0.12, 0.16, 0.12, [0.5, 0.45, 0.4]); vilGeo(S.wood, T, VIL_U.cyl, -0.4, 0.83, -0.1, 0.22, 0.06, 0.22, [0.55, 0.4, 0.25]); };
+  const bed = (x, z, ry = 0) => { const T = vilSub(F, x, 0, z, ry); vilBox(S.wood, T, 0, 0.2, 0, 1.0, 0.4, 2.0, dark); vilBox(S.cloth, T, 0, 0.47, 0.05, 0.92, 0.16, 1.85, cloth); vilBox(S.cloth, T, 0, 0.6, -0.75, 0.7, 0.14, 0.35, [0.85, 0.82, 0.74]); vilBox(S.wood, T, 0, 0.5, -0.98, 1.0, 1.0, 0.07, dark); };
+  const chest = (x, z, ry = 0) => vilBox(S.wood, vilSub(F, x, 0, z, ry), 0, 0.27, 0, 0.95, 0.54, 0.5, [0.35, 0.22, 0.12]);
+  const shelf = (x, z, ry = 0) => { const T = vilSub(F, x, 0, z, ry); for (const y of [0.5, 1.1, 1.7]) vilBox(S.wood, T, 0, y, 0, 1.4, 0.05, 0.35, wood); for (const sx of [-1, 1]) vilBox(S.wood, T, sx*0.68, 1.0, 0, 0.05, 2.0, 0.35, dark);
+    for (let i=0;i<7;i++) vilGeo(S.cloth, T, VIL_U.cyl, -0.55 + i*0.18, 1.18 + (i % 3)*0.6 - 0.02, 0, 0.13, 0.17 + (i % 2)*0.06, 0.13, [[0.55,0.32,0.2],[0.75,0.68,0.5],[0.35,0.4,0.3]][i % 3]); };
+  const barrel = (x, z) => { vilGeo(S.wood, F, VIL_U.cyl, x, 0.45, z, 0.62, 0.9, 0.62, [0.45, 0.31, 0.18]); for (const y of [0.15, 0.75]) vilGeo(S.iron, F, VIL_U.cyl, x, y, z, 0.65, 0.06, 0.65, [0.25, 0.25, 0.25]); };
+  const hearth = (side, y0 = 0) => { const x = side*(W/2 - wt - 0.45), hx = x - side*0.85;   // fireplace in front of the chimney breast
+    for (const sz of [-1, 1]) vilBox(S.stone, F, hx, y0 + 0.65, sz*0.75, 0.75, 1.3, 0.3, b.stoneC);
+    vilBox(S.stone, F, hx, y0 + 1.45, 0, 0.8, 0.35, 1.8, b.stoneC); vilBox(S.stone, F, hx + side*0.15, y0 + 0.05, 0, 0.9, 0.1, 1.4, b.stoneC.map(v => v*0.7));
+    vilBox(S.ember, F, hx + side*0.1, y0 + 0.16, 0, 0.5, 0.14, 0.9, [1, 1, 1]); for (const sz of [-0.2, 0.2]) vilGeo(S.wood, F, VIL_U.cyl6, hx + side*0.05, y0 + 0.24, sz, 0.14, 0.9, 0.14, dark, 0, 0, Math.PI/2 + sz);
+    if (!y0) b.hearth = [F.x + (hx - side*0.4)*F.c, F.y + y0 + 0.8, F.z - (hx - side*0.4)*F.s]; };
+  if (b.enter === 'church'){
+    for (let z = -D/2 + 4; z < D/2 - 3; z += 1.6) for (const sx of [-1, 1]){ const T = vilSub(F, sx*2.4, 0, z); vilBox(S.wood, T, 0, 0.45, 0, 3.0, 0.06, 0.4, wood); vilBox(S.wood, T, 0, 0.85, -0.22, 3.0, 0.8, 0.05, dark); for (const ex of [-1.45, 1.45]) vilBox(S.wood, T, ex, 0.45, 0, 0.06, 0.9, 0.45, dark); }
+    vilBox(S.stone, F, 0, 0.5, -D/2 + 2.2, 2.4, 1.0, 1.0, b.stoneC.map(v => v*1.1)); vilBox(S.cloth, F, 0, 1.01, -D/2 + 2.2, 2.5, 0.04, 1.05, [0.85, 0.82, 0.76]);
+    for (const sx of [-0.8, 0.8]) vilBox(S.ember, F, sx, 1.25, -D/2 + 2.1, 0.06, 0.4, 0.06, [1, 1, 1]);
+    vilBox(S.stone, F, 0, 0.12, -D/2 + 3.2, W - 2*wt, 0.24, 3.4, b.stoneC.map(v => v*0.8));
+    b.hearth = [F.x + (-D/2 + 3)*F.s, F.y + 1.6, F.z + (-D/2 + 3)*F.c]; b.seats = [];
+    return;
+  }
+  if (b.enter === 'smithy'){
+    const x = W/2 - wt - 1.1, z = -D/2 + wt + 0.9;
+    vilBox(S.stone, F, x, 0.45, z, 1.8, 0.9, 1.4, b.stoneC); vilBox(S.ember, F, x, 0.92, z, 1.1, 0.06, 0.8, [1, 1, 1]);
+    vilGeo(S.stone, F, VIL_U.cone4, x, 2.3, z - 0.1, 2.3, 1.8, 2.0, b.stoneC.map(v => v*0.8), 0, Math.PI/4, 0);
+    vilBox(S.stone, F, x, 3.6, z - 0.1, 0.8, 1.2, 0.8, b.stoneC.map(v => v*0.8));
+    const A = vilSub(F, 0.3, 0, 0.6); vilBox(S.wood, A, 0, 0.3, 0, 0.6, 0.6, 0.6, dark); vilBox(S.iron, A, 0, 0.7, 0, 0.35, 0.2, 0.75, [0.22, 0.22, 0.24]); vilBox(S.iron, A, 0, 0.86, 0, 0.42, 0.12, 0.9, [0.3, 0.3, 0.32]);
+    barrel(-W/2 + wt + 0.8, -D/2 + wt + 0.8); table(-W/2 + 2.2, 0.6, Math.PI/2, 1.6);
+    for (let i=0;i<6;i++) vilBox(S.iron, F, -W/2 + 1.2 + i*0.3, 1.6, -D/2 + wt + 0.05, 0.05, 0.7, 0.04, [0.3, 0.3, 0.3]);
+    b.hearth = [F.x + x*F.c + z*F.s, F.y + 1.4, F.z - x*F.s + z*F.c]; b.forge = true; b.seats = [];
+    return;
+  }
+  // two-storey house or tavern: stair along the left wall, rising toward the back; hearth on the right
+  const { run, xs0, xs1, zb } = b.stair;
+  for (let i=0;i<12;i++){ const y1 = (i + 1)*H/12; vilBox(S.wood, F, (xs0 + xs1)/2, y1/2, zb - (i + 0.5)*run/12, 1.0, y1, run/12, i % 2 ? wood : wood.map(v => v*0.92)); }
+  vilBox(S.wood, F, xs1 + 0.05, H + 0.45, -D/2 + wt + run/2, 0.06, 0.9, run, dark);   // rail at the stairwell
+  hearth(1); hearth(1, H + 0.0);
+  b.seats = [];
+  if (b.enter === 'tavern'){
+    vilBox(S.wood, F, 0.6, 0.55, -D/2 + wt + 1.2, 3.6, 1.1, 0.7, dark); for (let i=0;i<3;i++) barrel(-0.6 + i*0.9, -D/2 + wt + 0.45);
+    for (const [x, z] of [[-1.6, 1.4], [1.6, 1.6], [3.6, -1.6]]){ table(x, z, 0, 1.8); for (const sz of [-1, 1]) for (const sx of [-0.5, 0.5]) b.seats.push([x + sx, z + sz*0.75, sz]); }
+    chest(-3.2, D/2 - wt - 0.5); shelf(-2.6, -D/2 + wt + 0.25);
+    for (let i=0;i<3;i++) barrel(W/2 - wt - 0.5 - i*0.0, D/2 - wt - 0.5 - i*0.9);
+  } else {
+    table(0.4, 0.8, 0, 1.6); shelf(0.8, -D/2 + wt + 0.25); chest(W/2 - wt - 1.6, D/2 - wt - 0.5); barrel(-W/2 + wt + 1.6, D/2 - wt - 0.5);
+    for (const sz of [-1, 1]) b.seats.push([0.4, 0.8 + sz*0.75, sz]);
+    const up = vilSub(F, 0, H, 0); const UF = { ...F }; Object.assign(UF, up);
+    const bedU = (x, z, ry) => { const T = vilSub(UF, x, 0, z, ry); vilBox(S.wood, T, 0, 0.2, 0, 1.0, 0.4, 2.0, dark); vilBox(S.cloth, T, 0, 0.47, 0.05, 0.92, 0.16, 1.85, cloth); vilBox(S.cloth, T, 0, 0.6, -0.75, 0.7, 0.14, 0.35, [0.85, 0.82, 0.74]); };
+    bedU(0.6, -D/2 + wt + 1.2, 0); bedU(2.2, -D/2 + wt + 1.2, 0); vilBox(S.wood, UF, -0.6, 0.27, D/2 - wt - 0.6, 0.95, 0.54, 0.5, [0.35, 0.22, 0.12]);
+  }
+  if (b.enter === 'tavern'){ const UF = vilSub(F, 0, H, 0); for (const x of [0.4, 2.4]) { const T = vilSub(UF, x, 0, -D/2 + wt + 1.2); vilBox(S.wood, T, 0, 0.2, 0, 1.0, 0.4, 2.0, dark); vilBox(S.cloth, T, 0, 0.47, 0.05, 0.92, 0.16, 1.85, cloth); } }
+}
+/* Roof surface over local (lx, lz): top and underside heights in the building frame (relative to the floor) */
+function vilRoofAt(b, lx, lz){
+  const I = b.roofI; if (!I) return null;
+  const a = b.rAlong ? Math.abs(lx) : Math.abs(lz - b.zOff), along = b.rAlong ? Math.abs(lz - b.zOff) : Math.abs(lx);
+  const RD = b.rD, RW = b.rAlong ? b.D + (b.jet || 0) : b.W;
+  let top = I.eYr + (RD/2 - a)*I.t; if (b.hip) top = Math.min(top, I.eYr + (RD/2 - (along - (RW/2 - RD/2)))*I.t);
+  return { top, under:top - I.dn };
+}
+
+/* ---------- Layout: roads raster, plots and buildings, cover, road graph ---------- */
+let VIL_L = null;
+function vilLayout(){
+  if (VIL_L) return VIL_L;
+  const G = VIL_G, N = G.n*G.n, R = rng(7207);
+  const L = { roadE:new Float32Array(N).fill(99), roadC:new Float32Array(N).fill(99), cob:new Uint8Array(N), occ:new Uint8Array(N), field:new Uint8Array(N), blds:[], bgrid:new Map(), items:[] };
+  const seg = (a, b, hw, cob) => { const pad = hw + 8, i0 = Math.max(0, Math.floor((Math.min(a[0], b[0]) - pad - G.x0)/G.cs)), i1 = Math.min(G.n - 1, Math.ceil((Math.max(a[0], b[0]) + pad - G.x0)/G.cs));
+    const j0 = Math.max(0, Math.floor((Math.min(a[1], b[1]) - pad - G.z0)/G.cs)), j1 = Math.min(G.n - 1, Math.ceil((Math.max(a[1], b[1]) + pad - G.z0)/G.cs)), dx = b[0] - a[0], dz = b[1] - a[1], L2 = dx*dx + dz*dz || 1;
+    for (let j=j0;j<=j1;j++) for (let i=i0;i<=i1;i++){ const px = G.x0 + (i + 0.5)*G.cs, pz = G.z0 + (j + 0.5)*G.cs, t = clamp(((px - a[0])*dx + (pz - a[1])*dz)/L2, 0, 1), d = Math.hypot(px - a[0] - t*dx, pz - a[1] - t*dz), e = d - hw, k = j*G.n + i;
+      if (e < L.roadE[k]){ L.roadE[k] = e; L.roadC[k] = d; L.cob[k] = cob; } } };
+  for (const r of VIL_ROADS) for (let i=1;i<r.path.length;i++) seg(r.path[i-1], r.path[i], r.w, r.cob);
+  for (let j=0;j<G.n;j++) for (let i=0;i<G.n;i++){ const px = G.x0 + (i + 0.5)*G.cs, pz = G.z0 + (j + 0.5)*G.cs, e = Math.max(VIL_SQ.x0 - px, px - VIL_SQ.x1, VIL_SQ.z0 - pz, pz - VIL_SQ.z1), k = j*G.n + i;
+    if (e < 6 && e < L.roadE[k]){ L.roadE[k] = e; L.roadC[k] = 6; L.cob[k] = 1; }
+    if (vilOnBridge(px, pz)){ L.roadE[k] = Math.min(L.roadE[k], -0.5); L.roadC[k] = 6; L.cob[k] = 1; } }
+  L.roadAt = (x, z) => { const k = vilIdx(x, z); return k < 0 ? 99 : L.roadE[k]; };
+  L.occAt = (x, z) => { const k = vilIdx(x, z); return k < 0 ? 0 : L.occ[k]; };
+  const mark = (x, z, ry, w, d, v = 1, m = 1.2) => { const c = Math.cos(ry), s = Math.sin(ry);
+    for (let u = -w/2 - m; u <= w/2 + m; u += 1) for (let q = -d/2 - m; q <= d/2 + m; q += 1){ const k = vilIdx(x + u*c + q*s, z - u*s + q*c); if (k >= 0 && L.occ[k] < v) L.occ[k] = v; } };
+  L.mark = mark;
+  const fits = (x, z, ry, w, d, inside) => { const c = Math.cos(ry), s = Math.sin(ry);
+    for (let u = -w/2 - 0.5; u <= w/2 + 0.5; u += 1.25) for (let q = -d/2 - 0.5; q <= d/2 + 0.5; q += 1.25){ const px = x + u*c + q*s, pz = z - u*s + q*c, k = vilIdx(px, pz);
+      if (k < 0 || L.occ[k] || L.roadE[k] < 0.6 || vilHeight(px, pz) < 0.9) return false; const wd = vilWallD(px, pz); if (inside ? wd > 0.9 : wd < 1.14) return false; }
+    return true; };
+  // ---- building specs
+  const stoneTint = () => { const k = 0.9 + R()*0.2; return [0.66*k, 0.61*k, 0.53*k]; };
+  const plTint = () => { const p = [[0.86,0.82,0.72],[0.88,0.8,0.62],[0.82,0.78,0.72],[0.9,0.86,0.78],[0.84,0.72,0.58]][(R()*5)|0], k = 0.92 + R()*0.1; return p.map(v => v*k); };
+  const thatchC = () => { const k = 0.85 + R()*0.25, age = R(); return [lerp(0.68, 0.46, age)*k, lerp(0.56, 0.37, age)*k, lerp(0.34, 0.27, age)*k]; };
+  const tileC = () => { const k = 0.85 + R()*0.25; return [0.6*k, 0.3*k, 0.2*k]; };
+  const add = o => {
+    const b = { st:1, H:3.0, H2:2.7, jet:0, wt:0.32, wall:'timber', roof:'thatch', hip:false, chim:0, porch:false, outshut:false, enter:null, doorU:0, doorW:1.15, doorH:2.15, ...o };
+    b.id = L.blds.length; b.c = Math.cos(b.ry); b.s = Math.sin(b.ry);
+    if (b.wall === 'stone' && !b.upper) b.upper = 'stone';
+    b.jet = b.st === 2 && b.wall === 'timber' && b.jetty ? 0.5 : 0;
+    b.ridgeZ = b.ridgeZ ?? (b.D + b.jet > b.W);
+    b.pitch = b.pitch ?? (b.roof === 'thatch' ? 0.9 : 0.68);
+    b.stoneC = b.stoneC ?? stoneTint(); b.plC = plTint(); b.roofC = b.roofC ?? (b.roof === 'thatch' ? thatchC() : tileC());
+    b.doorC = [0.32 + R()*0.15, 0.2 + R()*0.1, 0.12]; b.shutC = [[0.22,0.32,0.26],[0.45,0.2,0.14],[0.3,0.25,0.18],[0.2,0.26,0.36]][(R()*4)|0]; b.shutters = R() < 0.5;
+    let gmin = 1e9, gmax = -1e9; for (const [u, q] of [[-1,-1],[1,-1],[-1,1],[1,1],[0,0],[0,1]]){ const px = b.x + u*b.W/2*b.c + q*b.D/2*b.s, pz = b.z - u*b.W/2*b.s + q*b.D/2*b.c, h = vilHeight(px, pz); gmin = Math.min(gmin, h); gmax = Math.max(gmax, h); }
+    b.gmin = gmin; b.fy0 = gmax + 0.32; b.eY = b.st === 2 ? b.H + b.H2 : b.H;
+    const dz = b.D/2 + 1.6; b.door = [b.x + b.doorU*b.c + dz*b.s, b.z - b.doorU*b.s + dz*b.c];
+    mark(b.x, b.z, b.ry, b.W, b.D + b.jet + (b.outshut ? 5.4 : 0), 1, 1.2);
+    if (o.court){ const f = b.D/2 + o.court/2 + 0.5; mark(b.x + f*b.s, b.z + f*b.c, b.ry, b.W + 2, o.court, 2, 0); }   // keep a forecourt clear
+    L.blds.push(b);
+    const r = Math.hypot(b.W, b.D)/2 + 3; for (let gx = Math.floor((b.x - r)/16); gx <= Math.floor((b.x + r)/16); gx++) for (let gz = Math.floor((b.z - r)/16); gz <= Math.floor((b.z + r)/16); gz++){ const kk = gx + ',' + gz; if (!L.bgrid.has(kk)) L.bgrid.set(kk, []); L.bgrid.get(kk).push(b); }
+    return b; };
+  // reserved ground: market square, churchyard and tower, gatehouses
+  mark(0, -227, 0, 50, 40, 2, 0); mark(-8.5, -262, 0, 6, 6, 1, 1);
+  for (const gz of [-132, -328]) mark(0, gz, 0, 18, 12, 2, 0);
+  const H = Math.PI/2;
+  L.tavern = add({ x:33, z:-226, ry:-H, W:13, D:8.5, st:2, wall:'timber', roof:'tile', jetty:true, chim:1, porch:true, enter:'tavern', name:'the Plough tavern', shutters:true });
+  L.houseA = add({ x:-15.5, z:-186, ry:H, W:9.5, D:7, st:2, wall:'timber', roof:'thatch', jetty:true, chim:1, enter:'house', name:"the reeve's house" });
+  L.houseB = add({ x:-35, z:-232, ry:H, W:10, D:8, st:2, wall:'stone', roof:'thatch', chim:1, enter:'house', name:"the weaver's house", hip:true });
+  L.smithy = add({ x:19, z:-151, ry:-H, W:9, D:7, st:1, H:3.4, wall:'stone', roof:'tile', chim:1, open:true, enter:'smithy', name:'the smithy', court:12 });
+  L.church = add({ x:0, z:-272, ry:0, W:10, D:24, st:1, H:7.4, wall:'stone', roof:'tile', roofC:[0.3, 0.33, 0.36], ridgeZ:true, doorW:1.9, doorH:3.3, wt:0.7, pitch:0.85, enter:'church', name:'the church', church:true });
+  add({ x:-21, z:-152, ry:H, W:10, D:6, st:1, H:2.9, shed:true, roof:'tile', name:"the carpenter's yard", court:12 });
+  L.mill = add({ x:VIL_MILL.x, z:VIL_MILL.zb - 1.2 - 4, ry:0, W:10, D:8, st:2, wall:'stone', roof:'tile', chim:-1, name:'the watermill' });
+  add({ x:68, z:16, ry:0, W:16, D:9, st:1, H:4.6, wall:'board', roof:'thatch', doorW:3.2, doorH:3.4, name:'the barn', hip:R() < 0.5 });
+  add({ x:36, z:22, ry:-H, W:10, D:6.5, st:1, wall:'cob', roof:'thatch', chim:-1, porch:true, outshut:true, name:'a farmhouse' });
+  add({ x:-70, z:14, ry:0, W:14, D:8, st:1, H:4.4, wall:'board', roof:'thatch', doorW:3.0, doorH:3.3, name:'the tithe barn' });
+  add({ x:-38, z:24, ry:H, W:9, D:6.5, st:1, wall:'cob', roof:'thatch', chim:1, name:'a farmhouse', outshut:true });
+  // generated plots along lanes: one storey cottages outside, denser two-storey rows inside the wall
+  const plots = (path, hw, inside, maxN, sides = [1, -1]) => { let made = 0;
+    for (const sg of sides){ let s = 3; const segL = []; let tot = 0; for (let i=1;i<path.length;i++){ const l = Math.hypot(path[i][0] - path[i-1][0], path[i][1] - path[i-1][1]); segL.push(l); tot += l; }
+      const at = s0 => { let acc = 0; for (let i=0;i<segL.length;i++){ if (acc + segL[i] >= s0){ const t = (s0 - acc)/segL[i], a = path[i], b = path[i+1]; return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), (b[0] - a[0])/segL[i], (b[1] - a[1])/segL[i]]; } acc += segL[i]; } return null; };
+      while (s < tot - 4 && made < maxN && L.blds.length < 62){
+        const two = inside && R() < 0.55, W = (two ? 7.5 : 7) + R()*4, D = 6 + R()*2.4, p = at(s + W/2); if (!p) break;
+        const nx = -p[3]*sg, nz = p[2]*sg, off = hw + 1.7 + D/2 + (two && R() < 0.6 ? 0.5 : 0), x = p[0] + nx*off, z = p[1] + nz*off, ry = Math.atan2(-nx, -nz);
+        if (fits(x, z, ry, W, D, inside)){
+          const wallK = R(), wall = inside ? (wallK < 0.55 ? 'timber' : wallK < 0.8 ? 'stone' : 'cob') : (wallK < 0.35 ? 'timber' : wallK < 0.65 ? 'cob' : 'stone');
+          add({ x, z, ry, W, D, st:two ? 2 : 1, wall, roof:R() < (inside ? 0.5 : 0.7) ? 'thatch' : 'tile', hip:R() < 0.28, jetty:R() < 0.65, chim:R() < 0.8 ? (R() < 0.5 ? -1 : 1) : 0, porch:R() < 0.25, outshut:!two && R() < 0.3, doorU:(R() - 0.5)*W*0.35, name:inside ? 'a house' : 'a cottage' });
+          made++; s += W + 2 + R()*5; }
+        else s += 2.5; } }
+    return made; };
+  const ring = VIL_ROADS[4].path;
+  plots(VIL_ROADS[1].path, 2.6, true, 6);
+  plots(ring, 2.0, true, 40);
+  plots(VIL_ROADS[2].path, 2.0, true, 4);
+  plots(VIL_ROADS[6].path, 2.0, false, 6); plots(VIL_ROADS[5].path, 2.0, false, 3, [1]); plots(VIL_ROADS[0].path.filter(p => p[1] > 50 && p[1] < 260), 2.8, false, 3);
+  // ---- field raster (after buildings and roads)
+  for (let j=0;j<G.n;j++) for (let i=0;i<G.n;i++){ const k = j*G.n + i; if (L.occ[k] || L.roadE[k] < 1.2) continue; const px = G.x0 + (i + 0.5)*G.cs, pz = G.z0 + (j + 0.5)*G.cs; L.field[k] = vilFieldCalc(px, pz); }
+  L.fieldAt = (x, z) => { const k = vilIdx(x, z); return k < 0 ? 0 : L.field[k]; };
+  // ---- destructible cover
+  const it = (t, x, z, ry, s = 1) => { if (L.occAt(x, z) === 1 || vilHeight(x, z) < 0.4) return; L.items.push({ t, x, z, ry, s }); };
+  const line = (t, a, b, step, skip) => { const L2 = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.max(1, Math.round(L2/step)), ry = Math.atan2(-(b[1] - a[1]), b[0] - a[0]);
+    for (let i=0;i<n;i++){ const u = (i + 0.5)/n, x = lerp(a[0], b[0], u), z = lerp(a[1], b[1], u); if (skip && skip(x, z)) continue; it(t, x, z, ry); } };
+  for (const P of VIL_PENS){ const gx = P.gate === 'w' ? P.x0 : P.x1, gz = (P.z0 + P.z1)/2, gate = (x, z) => Math.abs(x - gx) < 0.5 && Math.abs(z - gz) < 2.2;
+    line('fence', [P.x0, P.z0], [P.x1, P.z0], 3); line('fence', [P.x0, P.z1], [P.x1, P.z1], 3); line('fence', [P.x0, P.z0], [P.x0, P.z1], 3, gate); line('fence', [P.x1, P.z0], [P.x1, P.z1], 3, gate);
+    P.segs = L.items.filter(q => q.t === 'fence' && q.x >= P.x0 - 1 && q.x <= P.x1 + 1 && q.z >= P.z0 - 1 && q.z <= P.z1 + 1); }
+  const roadGap = (x, z) => L.roadAt(x, z) < 1.5;
+  for (const sx of [-1, 1]) line('wall', [sx*9, 50], [sx*600, 50], 3, roadGap);
+  for (let z = 52; z < 640; z += 3){ if (Math.abs(z - 175) < 6 || Math.abs(z - 470) < 6) continue; const x = vilSouthX(z); for (const sx of [-1, 1]) it('wall', x + sx*5.4, z + 1.5, H); }
+  line('hedge', [-600, 320], [600, 320], 3, (x, z) => roadGap(x, z) || Math.abs(x - vilSouthX(z)) < 8);
+  for (const sx of [-1, 1]) line('hedge', [sx*152, -150], [sx*600, -150], 3, roadGap);
+  for (const b of L.blds){ if (!b.enter && b.name !== 'a house' && b.name !== 'a cottage') continue;   // back gardens: fences, woodpiles, barrels
+    const back = (u, q) => [b.x + u*b.c + q*b.s, b.z - u*b.s + q*b.c], q0 = -b.D/2 - (b.outshut ? 3.4 : 0.8), g = 6 + R()*3;
+    if (R() < 0.55){ const a = back(-b.W/2, q0 - g), c = back(b.W/2, q0 - g), a0 = back(-b.W/2, q0), c0 = back(b.W/2, q0); line('fence', a, c, 3); line('fence', a0, a, 3); line('fence', c0, c, 3); }
+    if (R() < 0.6){ const p = back((R() - 0.5)*b.W*0.6, q0 - 1.4); it('logs', p[0], p[1], b.ry); }
+    if (R() < 0.5){ const p = back(b.W/2 - 1, q0 - 2.5 - R()*2); it('barrel', p[0], p[1], R()*6); }
+    if (R() < 0.35){ const p = back(-b.W/2 + 1.5, q0 - 3); it('crate', p[0], p[1], R()*6); } }
+  for (const [x, z, n] of [[-16, -214, 4], [16, -240, 5], [-10, -240, 3], [26, -214, 4]]) for (let i=0;i<n;i++) it(R() < 0.5 ? 'crate' : 'barrel', x + (R() - 0.5)*4, z + (R() - 0.5)*3, R()*6);
+  for (const [x, z] of [[24, -222], [26, -231], [24.5, -235]]) it('barrel', x, z, 0);   // the tavern's casks
+  for (const [x, z, ry] of [[8, -218, 0.4], [-5, -170, 1.4], [52, 34, 2.0], [-55, 34, 0.6], [22, 120, 1.2], [6, -40 + 30, 0.1], [-20, 300, 0.3], [-60, -110, 2.5]]) it('cart', x, z, ry);
+  for (const [x, z] of [[85, 34], [92, 24], [-88, 38], [-96, 26], [40, 250], [-140, 230], [180, 380], [-260, 560]]) it('stack', x, z, R()*6);
+  for (let i=0;i<70;i++){ const x = (R() - 0.5)*900, z = 60 + R()*560; if (L.fieldAt(x, z) === 5) it('bale', x, z, R()*6); }
+  for (let i=0;i<14;i++) it('crate', 28 + R()*6, 8 + R()*10, R()*6);
+  for (const [x, z] of [[14.5, -148], [14.5, -146.6], [14, -155]]) it('logs', x, z, H);
+  return VIL_L = L;
+}
+/* Cover geometry: post-and-rail fences, crates, casks, bales, stacks, carts, dry-stone walls, hedges, woodpiles */
+function vilCoverGeo(t, seed){
+  const S = vilSlots(), F = vilFrame(0, 0, 0, 0), r = rng(seed), wd = [0.42, 0.32, 0.2], dk = [0.3, 0.22, 0.14], st = [0.85, 0.7, 0.38];
+  switch (t){
+    case 'fence': for (const x of [-1.45, 1.45]) vilBox(S.wood, F, x, 0.6, 0, 0.13, 1.25, 0.13, dk); for (const y of [0.55, 1.0]) vilBox(S.wood, F, 0, y, 0.07, 3.0, 0.1, 0.05, wd, 0, 0, (r() - 0.5)*0.04); vilBox(S.wood, F, 0.2, 0.78, 0.04, 1.75, 0.08, 0.04, wd, 0, 0, 0.5); break;
+    case 'crate': vilBox(S.wood, F, 0, 0.4, 0, 0.8, 0.8, 0.8, wd); for (const y of [0.06, 0.74]) for (const z of [-0.41, 0.41]) vilBox(S.wood, F, 0, y, z, 0.84, 0.1, 0.03, dk); vilBox(S.wood, F, 0, 0.4, 0.41, 0.06, 0.8, 0.03, dk, 0, 0, 0.78); break;
+    case 'barrel': { const g = new THREE.CylinderGeometry(0.33, 0.33, 0.95, 12, 4), p = g.attributes.position; for (let i=0;i<p.count;i++){ const k = 1 + 0.14*Math.cos(p.getY(i)/0.95*Math.PI); p.setX(i, p.getX(i)*k); p.setZ(i, p.getZ(i)*k); } g.computeVertexNormals(); vilGeo(S.wood, F, g, 0, 0.48, 0, 1, 1, 1, [0.46, 0.32, 0.19]); g.dispose();
+      for (const y of [0.18, 0.78]) vilGeo(S.iron, F, VIL_U.cyl, 0, y, 0, 0.72, 0.05, 0.72, [0.2, 0.2, 0.21]); break; }
+    case 'bale': vilBox(S.thatch, F, 0, 0.3, 0, 1.15, 0.6, 0.62, st, 0, 0, 0, 0.6); for (const x of [-0.3, 0.3]) vilBox(S.thatch, F, x, 0.3, 0, 0.04, 0.62, 0.64, st.map(v => v*0.6)); break;
+    case 'stack': { const pts = []; for (let i=0;i<=10;i++){ const t = i/10; pts.push(new THREE.Vector2(i === 10 ? 0.01 : 2.3*(t < 0.55 ? 1 - 0.1*t : Math.cos((t - 0.55)/0.45*Math.PI/2)*0.95), t*4.4)); } const g = new THREE.LatheGeometry(pts, 16); vilGeo(S.thatch, F, g, 0, 0, 0, 1, 1, 1, st, 0, 0, 0, 1.2); g.dispose(); break; }
+    case 'cart': vilBox(S.wood, F, 0, 0.95, 0, 2.4, 0.12, 1.3, wd); for (const z of [-0.62, 0.62]) vilBox(S.wood, F, 0, 1.2, z, 2.4, 0.45, 0.06, wd); vilBox(S.wood, F, -1.18, 1.2, 0, 0.06, 0.45, 1.3, wd);
+      for (const z of [-0.78, 0.78]){ const g = new THREE.TorusGeometry(0.62, 0.06, 6, 16); vilGeo(S.wood, F, g, 0.2, 0.68, z, 1, 1, 1, dk); g.dispose(); for (let k=0;k<6;k++) vilBox(S.wood, F, 0.2, 0.68, z, 1.2, 0.05, 0.04, dk, 0, 0, k*Math.PI/6); }
+      vilGeo(S.wood, F, VIL_U.cyl6, 0.2, 0.68, 0, 0.1, 1.7, 0.1, dk, Math.PI/2); for (const z of [-0.5, 0.5]) vilBox(S.wood, F, 2.1, 0.62, z, 2.2, 0.08, 0.08, wd, 0, 0, 0.32);
+      for (let k=0;k<5;k++) vilBox(S.thatch, F, -0.5 + k*0.3, 1.15, (r() - 0.5)*0.6, 0.4, 0.3 + r()*0.2, 0.5, st); break;
+    case 'wall': for (let row=0;row<3;row++){ const y = 0.2 + row*0.33; for (let x = -1.5 + (row % 2)*0.35; x < 1.4; x += 0.62 + r()*0.2){ const k = 0.75 + r()*0.4; vilBox(S.stone, F, x + 0.3, y, (r() - 0.5)*0.08, 0.6 + r()*0.15, 0.32, 0.7 - row*0.07, [0.62*k, 0.6*k, 0.55*k], r()*0.08, r()*0.16, r()*0.08, 0.8); } }
+      for (let x = -1.35; x < 1.45; x += 0.3) vilBox(S.stone, F, x, 1.16, 0, 0.18, 0.36, 0.5, [0.5, 0.5, 0.46].map(v => v*(0.8 + r()*0.4)), 0, 0, (r() - 0.5)*0.3, 0.6); break;
+    case 'hedge': for (let i=0;i<4;i++){ const g = new THREE.IcosahedronGeometry(1, 1), p = g.attributes.position; for (let q=0;q<p.count;q++){ const k = 1 + 0.45*perlin(p.getX(q)*2.6 + seed + i*3.1, p.getZ(q)*2.6 + p.getY(q)*1.7) + 0.12*perlin(p.getX(q)*7 + i, p.getY(q)*7); p.setXYZ(q, p.getX(q)*k, p.getY(q)*k, p.getZ(q)*k); } g.computeVertexNormals();
+        const k = 0.7 + r()*0.4, gs = vilSlots().cloth; vilGeo(gs, F, g, -1.15 + i*0.77 + (r() - 0.5)*0.3, 0.8 + r()*0.6, (r() - 0.5)*0.4, 0.7 + r()*0.3, 0.7 + r()*0.6, 0.65 + r()*0.15, [0.14*k, 0.26*k, 0.08*k]);
+        for (let v=0; v<gs.C.length; v+=3){ const y = gs.P[v+1], n = 0.7 + 0.6*hash2(gs.P[v]*7.3, gs.P[v+2]*5.1 + y*3.3); gs.C[v] *= n*(0.7 + 0.3*y); gs.C[v+1] *= n*(0.75 + 0.3*y); gs.C[v+2] *= n; }
+        const base = S.cloth.P.length/3; S.cloth.P.push(...gs.P); S.cloth.N.push(...gs.N); S.cloth.U.push(...gs.U); S.cloth.C.push(...gs.C); S.cloth.B.push(...gs.B); S.cloth.I.push(...gs.I.map(v => v + base)); g.dispose(); } break;
+    case 'logs': for (let row=0;row<4;row++) for (let i=0;i<5 - row;i++) vilGeo(S.wood, F, VIL_U.cyl6, -0.55 + i*0.27 + row*0.13, 0.13 + row*0.23, 0, 0.25, 1.1, 0.25, [0.5, 0.38, 0.24].map(v => v*(0.8 + r()*0.4)), Math.PI/2); break;
+  }
+  const out = {}; for (const k of VIL_SLOTS){ const g = vilFinish(S[k]); if (g) out[k] = g; }
+  const parts = Object.entries(out); const m = parts.length > 1 ? mergeGeometries(parts.map(([, g]) => g)) : parts[0][1];
+  if (parts.length > 1) OWNED.push(m);
+  m.userData.slot = parts.length > 1 ? 'mixed' : parts[0][0]; return m;
+}
+/* Low-poly villager: tunic vertices are pure white so the instance colour dyes only the clothes */
+function vilPersonGeo(){
+  const b = geoBuf(), V = V3;
+  for (const sx of [-1, 1]) tubeInto(b, [V(sx*0.1, 0.9, 0), V(sx*0.1, 0.48, 0.01), V(sx*0.1, 0.06, 0)], [0.075, 0.062, 0.055], 6, {});
+  for (const sx of [-1, 1]) tubeInto(b, [V(sx*0.1, 0.05, -0.04), V(sx*0.1, 0.05, 0.13)], [0.06, 0.05], 5, {});
+  tubeInto(b, [V(0, 0.62, 0), V(0, 0.9, 0), V(0, 1.2, 0), V(0, 1.45, 0)], [0.25, 0.21, 0.19, 0.12], 10, {});
+  for (const sx of [-1, 1]) tubeInto(b, [V(sx*0.23, 1.41, 0), V(sx*0.27, 1.12, 0.01), V(sx*0.27, 0.86, 0.03)], [0.06, 0.052, 0.045], 6, {});
+  tubeInto(b, [V(0, 1.44, 0), V(0, 1.53, 0)], [0.05, 0.05], 6, {});
+  const hd = new THREE.SphereGeometry(0.11, 10, 8), hp = hd.attributes.position, base = b.P.length/3;
+  for (let i=0;i<hp.count;i++){ b.P.push(hp.getX(i), hp.getY(i)*1.12 + 1.64, hp.getZ(i)); b.N.push(hp.getX(i)/0.11, hp.getY(i)/0.11, hp.getZ(i)/0.11); b.UV.push(0, 0); b.C.push(1, 1, 1); }
+  for (let i=0;i<hd.index.count;i++) b.I.push(base + hd.index.getX(i)); hd.dispose();
+  const g = owned(geoFinish(b)), p = g.attributes.position, c = g.attributes.color;
+  for (let i=0;i<p.count;i++){ const x = p.getX(i), y = p.getY(i), z = p.getZ(i); let col;
+    if (y > 1.52) col = y > 1.7 && z < 0.06 ? [0.08, 0.05, 0.03] : [0.55, 0.36, 0.26];
+    else if (y < 0.16 && Math.abs(x) < 0.2) col = [0.15, 0.11, 0.08];
+    else if (y < 0.64 && Math.abs(x) < 0.2) col = [0.12, 0.1, 0.07];
+    else if (Math.abs(x) > 0.2 && y < 0.92) col = [0.55, 0.36, 0.26];
+    else col = [1, 1, 1];
+    c.setXYZ(i, col[0], col[1], col[2]); }
+  return g;
+}
+function vilPersonMat(){
+  const m = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.85 });
+  m.onBeforeCompile = sh => {
+    sh.vertexShader = 'attribute vec4 aWalk;\n' + sh.vertexShader
+      .replace('#include <color_vertex>', `vColor = vec3(1.0); vColor *= color;
+        #ifdef USE_INSTANCING_COLOR
+          if (min(color.r, min(color.g, color.b)) > 0.98) vColor *= instanceColor.xyz;
+        #endif`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        float ph = aWalk.x, am = aWalk.y, bend = aWalk.z, sit = aWalk.w;
+        float sd = position.x > 0.0 ? 0.0 : 3.14159;
+        if (position.y < 0.92 && abs(position.x) < 0.2){ float k = (0.92 - position.y);
+          transformed.z += sin(ph + sd)*am*k*0.75 + sit*k*1.0; transformed.y += max(0.0, cos(ph + sd))*am*k*0.18 - sit*k*0.95; }
+        if (abs(position.x) > 0.2 && position.y > 0.8 && position.y < 1.46){ transformed.z += -sin(ph + sd)*am*(1.42 - position.y)*0.7 + bend*0.25*(1.42 - position.y); }
+        transformed.y += abs(sin(ph))*am*0.035 - sit*0.42;
+        if (bend > 0.0 && position.y > 0.9){ vec2 q = vec2(transformed.z, transformed.y - 0.9); transformed.z = q.x*cos(bend) + q.y*sin(bend); transformed.y = 0.9 - q.x*sin(bend) + q.y*cos(bend); }`);
+  };
+  m.customProgramCacheKey = () => 'vilPerson';
+  return m;
+}
+const VIL_BEASTS = {
+  cow:{ leg:0.72, body:1.75, r:0.45, neck:0.42, neckA:0.45, head:0.55, slope:0.02, horns:'hook', tail:0.75, walk:0.8, stride:1.9, spread:0,
+    paint:(c, x, y, z, by, br, bl) => { const pied = smoothstep(-0.05, 0.05, perlin(x*2.2 + 3.1, z*1.6 + y*1.9)); c[0] = lerp(0.12, 0.88, pied); c[1] = lerp(0.1, 0.85, pied); c[2] = lerp(0.09, 0.8, pied); if (y < 0.12) c[0] = c[1] = c[2] = 0.1; } },
+  brown:{ leg:0.72, body:1.75, r:0.46, neck:0.42, neckA:0.45, head:0.55, slope:0.02, horns:'hook', tail:0.75, walk:0.8, stride:1.9,
+    paint:(c, x, y, z, by, br, bl) => { const k = 0.85 + 0.15*perlin(x*3, z*3 + y); c[0] = 0.48*k; c[1] = 0.27*k; c[2] = 0.14*k; if (y < 0.12 || z > bl*0.75) { c[0] *= 0.5; c[1] *= 0.5; c[2] *= 0.5; } } },
+  sheep:{ leg:0.4, body:0.95, r:0.38, neck:0.24, neckA:0.6, head:0.3, slope:0, tail:0.18, walk:0.7, stride:1.1,
+    paint:(c, x, y, z, by, br, bl) => { const face = smoothstep(bl*0.5, bl*0.62, z) + (y < 0.36 ? 1 : 0); const k = 0.9 + 0.1*perlin(x*14, y*14 + z*9); c[0] = lerp(0.86*k, 0.14, clamp(face, 0, 1)); c[1] = lerp(0.82*k, 0.12, clamp(face, 0, 1)); c[2] = lerp(0.72*k, 0.11, clamp(face, 0, 1)); } },
+  pig:{ leg:0.28, body:1.15, r:0.33, neck:0.12, neckA:0.15, head:0.36, slope:0, tail:0.12, walk:0.6, stride:0.8,
+    paint:(c, x, y, z, by, br, bl) => { const k = 0.9 + 0.1*perlin(x*6, z*6); c[0] = 0.88*k; c[1] = 0.62*k; c[2] = 0.56*k; if (y < 0.06) { c[0] = 0.3; c[1] = 0.22; c[2] = 0.2; } } }
+};
+for (const k in VIL_BEASTS){ const B = VIL_BEASTS[k], by = B.leg + B.r*0.85; B.pivotY = by + B.r*0.25 + B.slope*B.body*0.4; B.pivotZ = B.body*0.42; }
+
+Helios.registerBiome({
+  id:'village', label:'Village', bounds:[0,-150,1150], windy:0.9,
+  climate:{ temp:17, night:6 }, surface:{ humidity:0.55, spread:0.32 },
+  clouds:{ cover:0.42, base:1300, top:2900, cirrus:0.35 },
+  sky:{ turbidity:3.5, rayleigh:1.6, mie:0.005, mieG:0.8 },
+  fog:{ density:0.00055, tint:[0.96,0.98,1.02] },
+  ground:[0.3,0.34,0.18],
+  camera(){ const x = -46, z = 22, y = vilHeight(x, z); return { pos:[x, y + 27, z], look:[10, 12, -236] }; },
+  build(k){
+    const { rng, smoothstep, lerp, srgb, lin, scatter, plantMat, bladeClump, broadleafPlant, gullGeo, critterMat, puffField } = k;
+    const heightAt = vilHeight, group = new THREE.Group(), R = rng(7301), L = vilLayout(), U = vilUnits(), dm = new THREE.Object3D();
+    // ---- terrain: grass, banks and woods in vertex colour; roads, cobbles and field strips per pixel from the layout rasters
+    const G = VIL_G, rd = new Uint8Array(G.n*G.n*4), fd = new Uint8Array(G.n*G.n*4);
+    for (let i=0;i<G.n*G.n;i++){ rd[i*4] = clamp((L.roadE[i] + 8)/16, 0, 1)*255; rd[i*4+1] = clamp(L.roadC[i]/8, 0, 1)*255; rd[i*4+2] = L.cob[i]*255; rd[i*4+3] = 255; fd[i*4] = L.field[i]*32; fd[i*4+3] = 255; }
+    const mkT = (d, filt) => { const t = new THREE.DataTexture(d, G.n, G.n, THREE.RGBAFormat); t.magFilter = t.minFilter = filt; t.generateMipmaps = false; t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; t.needsUpdate = true; return t; };
+    const RU = { uVilRoad:{ value:mkT(rd, THREE.LinearFilter) }, uVilField:{ value:mkT(fd, THREE.NearestFilter) }, uVilR:{ value:new THREE.Vector3(G.x0, G.z0, G.n*G.cs) } };
+    const tcol = (c, x, y, z, ny) => {
+      const n = 0.5 + 0.5*perlin(x*0.02, z*0.02), m = 0.5 + 0.5*perlin(x*0.09 + 3, z*0.09), sd = Math.abs(z - vilStreamZ(x));
+      if (y < 0.4) return srgb(c, 0.24 + 0.05*m, 0.21 + 0.04*m, 0.15);
+      if (y < 1.6 && sd < 30) return srgb(c, lerp(0.28, 0.3, n), lerp(0.3, 0.36, n), 0.16);
+      const wd = vilWallD(x, z); if (wd < 0.98) return srgb(c, 0.38 + 0.06*m, 0.37 + 0.05*m, 0.22 + 0.03*m);   // trodden yards inside the wall
+      const r = Math.hypot(x*0.85, z + 120), wood = smoothstep(0.42, 0.62, 0.5 + perlin(x*0.004 + 11, z*0.004)*0.9)*smoothstep(600, 800, r);
+      const lush = 0.5 + 0.5*perlin(x*0.006 + 2, z*0.006);
+      return srgb(c, lerp(lerp(0.32, 0.44, lush) + 0.04*m, 0.17, wood), lerp(lerp(0.44, 0.5, lush) + 0.04*m, 0.24, wood), lerp(0.16, 0.22, lush*0.5)*(1 - 0.4*wood) + 0.02*m);
+    };
+    const terr = makeTerrain({ size:1440, cz:-180, seg:520, height:heightAt, color:tcol, detail:{ rock:[0.5,0.47,0.42], rockLo:0.42, bump:12, wet:0.7, grain:1, strata:0.3 } });
+    const outer = makeTerrain({ size:3600, cz:-150, seg:260, height:(x, z) => heightAt(x, z) - 0.9*(1 - smoothstep(695, 740, Math.max(Math.abs(x), Math.abs(z + 180)))), color:tcol, apron:{ size:12000, seg:120 }, detail:{ rock:[0.5,0.47,0.42], rockLo:0.42, bump:10, wet:0.5, strata:0.3 } });
+    for (const T of [terr, outer]){ const m = T.material, base = m.onBeforeCompile;
+      m.onBeforeCompile = sh => { base(sh); Object.assign(sh.uniforms, RU);
+        sh.fragmentShader = 'uniform sampler2D uVilRoad, uVilField; uniform vec3 uVilR;\n' + sh.fragmentShader.replace('// surface state: rain-dark and glossy', `{
+          vec2 ruv = (vWP.xz - uVilR.xy)/uVilR.z; float inR = step(0.0, ruv.x)*step(ruv.x, 1.0)*step(0.0, ruv.y)*step(ruv.y, 1.0);
+          vec4 rdv = texture2D(uVilRoad, ruv); float fc = floor(texture2D(uVilField, ruv).r*255.0/32.0 + 0.5)*inR;
+          float edge = mix(9.0, rdv.r*16.0 - 8.0, inR), cen = rdv.g*8.0, cob = rdv.b, hw = cen - edge;
+          float fine = 1.0 - smoothstep(50.0, 200.0, length(vViewPosition));
+          float lum = dot(diffuseColor.rgb, vec3(0.333))/max(dot(vColor.rgb, vec3(0.333)), 0.02);
+          if (fc > 0.5 && vWP.y > 0.3){
+            vec3 soil = vec3(0.3, 0.22, 0.15)*(0.85 + 0.3*n1);
+            float fur = 0.5 + 0.5*sin(twp.x*8.4 + n3*2.0);
+            vec3 fcol = fc < 1.5 ? vec3(0.66, 0.53, 0.27) : fc < 2.5 ? vec3(0.7, 0.64, 0.4) : fc < 3.5 ? mix(soil, vec3(0.2, 0.33, 0.12), 0.4) : fc < 4.5 ? soil*0.95 : fc < 5.5 ? vec3(0.4, 0.46, 0.2) : vec3(0.32, 0.42, 0.26);
+            if (fc < 4.5) fcol *= 1.0 - 0.34*fur*mix(0.35, 1.0, fine)*(fc > 2.5 ? 1.0 : 0.6);
+            diffuseColor.rgb = pow(fcol, vec3(2.2))*mix(1.0, lum, 0.7)*(0.9 + 0.2*n2);
+          }
+          float onR = (1.0 - smoothstep(-0.3, 0.3, edge + (n2 - 0.5)*0.9*(1.0 - cob)))*inR;
+          if (onR > 0.0){
+            vec3 dirt = vec3(0.42, 0.33, 0.23)*(0.82 + 0.3*n1);
+            float rut = smoothstep(0.42, 0.06, abs(cen - 1.0))*step(1.7, hw)*(1.0 - cob), mid = smoothstep(0.42, 0.18, cen)*step(1.7, hw)*(1.0 - cob);
+            dirt = mix(dirt*(1.0 - 0.38*rut*fine), vec3(0.3, 0.37, 0.17)*(0.8 + 0.4*n2), mid*0.8);
+            vec2 cq = twp*4.2 + vec2(tvn(twp*1.7), tvn(twp*1.7 + 3.0))*0.6; cq.x += 0.5*mod(floor(cq.y), 2.0); vec2 cf = fract(cq) - 0.5; float ch = th21(floor(cq));
+            float mortar = smoothstep(0.24, 0.5, length(cf*vec2(1.0, 1.15)) + 0.08*(ch - 0.5))*(1.0 - smoothstep(5.0, 16.0, length(vViewPosition)));
+            vec3 cobc = mix(vec3(0.44, 0.41, 0.36), vec3(0.38, 0.35, 0.31), ch)*(0.86 + 0.2*ch*(1.0 - smoothstep(5.0, 16.0, length(vViewPosition))))*(1.0 - 0.38*mortar)*(0.86 + 0.24*n1);
+            diffuseColor.rgb = mix(diffuseColor.rgb, pow(mix(dirt, cobc, cob), vec3(2.2))*mix(1.0, lum, 0.5), onR);
+          }
+          float verge = smoothstep(0.0, 0.6, edge)*(1.0 - smoothstep(0.6, 2.2, edge))*(1.0 - cob)*inR;
+          diffuseColor.rgb *= 1.0 - 0.12*verge;
+        }
+        // surface state: rain-dark and glossy`); };
+      m.customProgramCacheKey = () => 'terrain5vil'; }
+    terr.castShadow = outer.castShadow = false; group.add(terr, outer);
+    const water = makeWater({ size:3600, cz:-150, color:0x2a3c34, distortion:1.2, scale:4 }); group.add(water);
+
+    // ---- pond ice (Frost freezes the mill pond; it thaws when the air is above freezing)
+    const iceTex = canvasTex(128, 128, (u, v) => { const d = Math.hypot(u - 0.5, (v - 0.5)*1.4)*2, a = clamp((1 - d)*3, 0, 1)*(0.85 + 0.15*fbm(u*9, v*9, 3)); return [220, 235, 245, a*255]; });
+    const ice = new THREE.Mesh(new THREE.PlaneGeometry(150, 70), new THREE.MeshStandardMaterial({ map:iceTex, transparent:true, opacity:0, roughness:0.15, metalness:0.05, color:0xdfeefa, depthWrite:false }));
+    ice.rotation.x = -Math.PI/2; ice.position.set(VIL_MILL.x, 0.04, vilStreamZ(VIL_MILL.x)); ice.renderOrder = 2; group.add(ice);
+    let iceK = 0;
+
+    // ---- architecture: every building, the curtain wall, towers, gates, bridge, church tower, well and stalls, merged per material
+    const SL = vilSlots();
+    for (const b of L.blds) vilBuild(SL, b);
+    const ST = [0.62, 0.58, 0.51], F0 = vilFrame(0, 0, 0, 0);
+    { // curtain wall with crenellations, skipping the two gateways
+      const gA = 6.4/VIL.rx, P = a => [VIL.cx + Math.cos(a)*VIL.rx, VIL.cz + Math.sin(a)*VIL.rz], segs = [];
+      for (const [A0, A1] of [[-Math.PI/2 + gA, Math.PI/2 - gA], [Math.PI/2 + gA, 1.5*Math.PI - gA]]){ const n = Math.ceil((A1 - A0)*105/8.5); for (let i=0;i<n;i++) segs.push([lerp(A0, A1, i/n), lerp(A0, A1, (i + 1)/n)]); }
+      for (const [a0, a1] of segs){
+        const p0 = P(a0), p1 = P(a1), dx = p1[0] - p0[0], dz = p1[1] - p0[1], Ls = Math.hypot(dx, dz), mx = (p0[0] + p1[0])/2, mz = (p0[1] + p1[1])/2;
+        const g0 = Math.min(heightAt(p0[0], p0[1]), heightAt(mx, mz), heightAt(p1[0], p1[1])), g1 = Math.max(heightAt(p0[0], p0[1]), heightAt(mx, mz), heightAt(p1[0], p1[1]));
+        const Fw = vilFrame(mx, 0, mz, Math.atan2(-dz, dx)), out = Math.sign((mx - VIL.cx)*Math.sin(Fw.ry) + (mz - VIL.cz)*Math.cos(Fw.ry)) || 1, top = g1 + 5.6;
+        vilBox(SL.stone, Fw, 0, (g0 - 1.5 + top)/2, 0, Ls + 0.5, top - g0 + 1.5, 1.8, ST);
+        for (let x = -Ls/2 + 0.6; x < Ls/2 - 0.4; x += 2.2) vilBox(SL.stone, Fw, x, top + 0.5, out*0.65, 1.1, 1.0, 0.5, ST.map(v => v*0.95));
+        vilBox(SL.stone, Fw, 0, top + 0.35, -out*0.75, Ls + 0.5, 0.7, 0.3, ST.map(v => v*0.95)); }
+      // round watchtowers with conical roofs
+      for (const a of [0, Math.PI, Math.PI/4, 3*Math.PI/4, -Math.PI/4, -3*Math.PI/4]){ const x = VIL.cx + Math.cos(a)*VIL.rx, z = VIL.cz + Math.sin(a)*VIL.rz, g = heightAt(x, z), Ft = vilFrame(x, g, z, 0);
+        vilGeo(SL.stone, Ft, U.cyl, 0, 5.5, 0, 8, 14, 8, ST.map(v => v*1.03)); vilGeo(SL.stone, Ft, U.cyl, 0, 12.8, 0, 8.8, 0.6, 8.8, ST.map(v => v*0.9));
+        vilGeo(SL.tile, Ft, U.cone, 0, 15.6, 0, 10, 5.2, 10, [0.52, 0.27, 0.18], 0, 0, 0, 1.0);
+        for (let q=0;q<4;q++){ const qa = q*Math.PI/2 + a; vilBox(SL.glass, Ft, Math.cos(qa)*4.02, 10.2, Math.sin(qa)*4.02, 0.5, 1.0, 0.5, [0.05, 0.05, 0.06], 0, -qa, 0, 1, 62); }
+        L.mark(x, z, 0, 9, 9, 1, 0); }
+      // gatehouses: two towers and a passage under a battlemented bridge, gates standing open
+      for (const [gz, s] of [[-132, 1], [-328, -1]]){ const g = heightAt(0, gz), Fg = vilFrame(0, g, gz, 0);
+        for (const sx of [-1, 1]){ vilBox(SL.stone, Fg, sx*4.6, 5.5, 0, 4.4, 14, 6, ST); for (let q=0;q<3;q++) vilBox(SL.stone, Fg, sx*4.6 + (q - 1)*1.4, 13, s*2.75, 0.8, 1.0, 0.5, ST); vilBox(SL.glass, Fg, sx*4.6, 8.5, s*3.02, 0.35, 1.2, 0.05, [0.05,0.05,0.06], 0, 0, 0, 1, 62);
+          vilBox(SL.wood, Fg, sx*2.2 + sx*0.05, 2.2, s*(2.5 - 1.1), 0.12, 4.4, 2.2, [0.3, 0.2, 0.12], 0, -sx*s*1.4 + 0, 0); }
+        vilBox(SL.stone, Fg, 0, 7.9, 0, 4.9, 4.2, 6, ST); vilBox(SL.stone, Fg, 0, 5.9, 0, 4.9, 0.25, 6.1, ST.map(v => v*0.8));
+        for (let x = -2; x <= 2; x += 1.4) vilBox(SL.stone, Fg, x, 10.5, s*2.75, 0.7, 1.0, 0.5, ST);
+        vilBox(SL.timber, Fg, 0, 5.6, s*3.05, 4.4, 0.4, 0.15, [0.25, 0.17, 0.1]); }
+      // church tower with a pyramidal spire
+      { const tx = -8.5, tz = -262, g = heightAt(tx, tz), Ft = vilFrame(tx, g, tz, 0), CS = L.church.stoneC;
+        vilBox(SL.stone, Ft, 0, 9.0, 0, 5.6, 19, 5.6, CS); vilBox(SL.stone, Ft, 0, 18.7, 0, 6.2, 0.6, 6.2, CS.map(v => v*0.9));
+        for (const [x, z] of [[-2.6,-2.6],[2.6,-2.6],[-2.6,2.6],[2.6,2.6]]) vilBox(SL.stone, Ft, x, 19.5, z, 0.9, 1.3, 0.9, CS);
+        vilGeo(SL.tile, Ft, U.cone4, 0, 24.5, 0, 7.4, 11, 7.4, [0.3, 0.33, 0.36], 0, Math.PI/4, 0);
+        for (let q=0;q<4;q++){ const qa = q*Math.PI/2; vilBox(SL.glass, Ft, Math.sin(qa)*2.82, 15.5, Math.cos(qa)*2.82, 0.9, 2.2, 0.9, [0.04, 0.04, 0.05], 0, qa, 0, 1, 62); }
+        vilBox(SL.iron, Ft, 0, 30.5, 0, 0.08, 1.4, 0.08, [0.6, 0.5, 0.2]); vilBox(SL.iron, Ft, 0, 30.8, 0, 0.6, 0.08, 0.08, [0.6, 0.5, 0.2]); }
+      // bridge: humped deck over one arch, parapets
+      { const B = VIL_BR, n = 34, Fb = vilFrame(0, 0, 0, 0), hw = B.hw;
+        for (let i=0;i<n;i++){ const za = lerp(B.z0, B.z1, i/n), zb = lerp(B.z0, B.z1, (i + 1)/n), ta = B.deck(za), tb = B.deck(zb), ba = B.arch(za), bb = B.arch(zb);
+          vilQuad(SL.stone, Fb, [-hw, ta, zb], [hw, ta, zb], [hw, ta, za], [-hw, ta, za], ST.map(v => v*0.85), 2.4, 2.4);
+          vilQuad(SL.stone, Fb, [hw, ba, za], [hw, bb, zb], [hw, tb, zb], [hw, ta, za], ST, 2.4, 2.4); vilQuad(SL.stone, Fb, [-hw, bb, zb], [-hw, ba, za], [-hw, ta, za], [-hw, tb, zb], ST, 2.4, 2.4);
+          if (ba > -2) vilQuad(SL.stone, Fb, [-hw, ba, za], [hw, ba, za], [hw, bb, zb], [-hw, bb, zb], ST.map(v => v*0.6), 2.4, 2.4);
+          for (const sx of [-1, 1]){ const x0 = sx*hw, x1 = sx*(hw - 0.42);
+            vilQuad(SL.stone, Fb, sx > 0 ? [x0, ta, za] : [x0, tb, zb], sx > 0 ? [x0, tb, zb] : [x0, ta, za], sx > 0 ? [x0, tb + 0.95, zb] : [x0, ta + 0.95, za], sx > 0 ? [x0, ta + 0.95, za] : [x0, tb + 0.95, zb], ST, 2.4, 2.4);
+            vilQuad(SL.stone, Fb, sx > 0 ? [x1, tb, zb] : [x1, ta, za], sx > 0 ? [x1, ta, za] : [x1, tb, zb], sx > 0 ? [x1, ta + 0.95, za] : [x1, tb + 0.95, zb], sx > 0 ? [x1, tb + 0.95, zb] : [x1, ta + 0.95, za], ST, 2.4, 2.4);
+            vilQuad(SL.stone, Fb, [Math.min(x0, x1), ta + 0.95, za], [Math.min(x0, x1), tb + 0.95, zb], [Math.max(x0, x1), tb + 0.95, zb], [Math.max(x0, x1), ta + 0.95, za], ST.map(v => v*1.05), 2.4, 2.4); } } }
+      // market: well, stalls with striped awnings, a lantern post
+      { const Fm = vilFrame(-6, heightAt(-6, -226), -226, 0); vilGeo(SL.stone, Fm, U.cyl, 0, 0.45, 0, 2.3, 0.9, 2.3, ST); vilGeo(SL.ember, Fm, U.cyl, 0, 0.6, 0, 1.6, 0.02, 1.6, [0.02, 0.03, 0.04]);
+        for (const sx of [-1, 1]) vilBox(SL.timber, Fm, sx*1.0, 1.5, 0, 0.14, 2.4, 0.14, [0.25, 0.17, 0.1]); vilGeo(SL.wood, Fm, U.cyl6, 0, 2.2, 0, 0.16, 2.1, 0.16, [0.3, 0.2, 0.12], 0, 0, Math.PI/2);
+        vilQuad(SL.tile, Fm, [-1.4, 2.6, 0.9], [1.4, 2.6, 0.9], [1.4, 3.3, 0], [-1.4, 3.3, 0], [0.5, 0.27, 0.18]); vilQuad(SL.tile, Fm, [1.4, 2.6, -0.9], [-1.4, 2.6, -0.9], [-1.4, 3.3, 0], [1.4, 3.3, 0], [0.5, 0.27, 0.18]); }
+      const stripes = [[0.75,0.2,0.15],[0.2,0.35,0.6],[0.8,0.65,0.25],[0.3,0.5,0.28]];
+      L.stalls = []; for (const P of VIL_PENS) P.open = false;
+      for (let i=0;i<6;i++){ const x = -18 + (i % 3)*13 + (i > 2 ? 4 : 0), z = i > 2 ? -240 : -213, ry = i > 2 ? 0 : Math.PI, Fs = vilFrame(x, heightAt(x, z), z, ry), col = stripes[i % 4];
+        for (const sx of [-1.3, 1.3]) for (const sz of [-0.6, 0.9]) vilBox(SL.timber, Fs, sx, sz > 0 ? 1.1 : 1.3, sz, 0.1, sz > 0 ? 2.2 : 2.6, 0.1, [0.3, 0.2, 0.12]);
+        vilBox(SL.wood, Fs, 0, 0.85, 0.5, 2.8, 0.08, 1.0, [0.45, 0.33, 0.2]);
+        for (let s=0;s<6;s++) vilQuad(SL.cloth, Fs, [-1.5 + s*0.5, 2.2, 1.25], [-1.0 + s*0.5, 2.2, 1.25], [-1.0 + s*0.5, 2.6, -0.7], [-1.5 + s*0.5, 2.6, -0.7], s % 2 ? col : [0.88, 0.84, 0.74], 1, 1);
+        for (let g=0;g<7;g++) vilGeo(SL.cloth, Fs, U.sph, -1.1 + g*0.36, 0.98, 0.45 + (g % 2)*0.2, 0.32, 0.22, 0.32, [[0.7,0.2,0.12],[0.85,0.6,0.2],[0.4,0.55,0.2],[0.65,0.55,0.4]][(g + i) % 4]);
+        L.stalls.push([x - Math.sin(ry)*0.25, z - Math.cos(ry)*0.25]); }
+      // watermill wheel housing and leat; kilns; washing lines
+      for (const [kx, kz] of VIL_KILNS){ const g = heightAt(kx, kz), Fk = vilFrame(kx, g, kz, 0);
+        vilGeo(SL.stone, Fk, U.dome, 0, -0.2, 0, 7, 7.5, 7, [0.6, 0.38, 0.28]); vilGeo(SL.stone, Fk, U.cyl, 0, 3.6, 0, 1.4, 1.2, 1.4, [0.55, 0.34, 0.25]);
+        vilBox(SL.ember, Fk, 0, 0.7, 3.2, 1.2, 1.2, 0.5, [1, 1, 1]); vilBox(SL.stone, Fk, 0, 1.5, 3.3, 1.8, 0.4, 0.8, [0.5, 0.32, 0.24]); L.mark(kx, kz, 0, 8, 8, 1, 0); }
+      for (const b of L.blds.filter(b => b.name === 'a house' || b.name === 'a cottage').slice(0, 12)){ if (R() < 0.4) continue;
+        const Fb = vilSub(vilFrame(b.x, heightAt(b.x, b.z), b.z, b.ry), 0, 0, -b.D/2 - (b.outshut ? 4.2 : 2.6)), wl = Math.min(6, b.W - 1);
+        const gy = h => heightAt(Fb.x, Fb.z) - Fb.y + h;
+        for (const sx of [-1, 1]) vilBox(SL.timber, Fb, sx*wl/2, gy(1.1), 0, 0.1, 2.2, 0.1, [0.3, 0.2, 0.12]);
+        vilBox(SL.iron, Fb, 0, gy(2.1), 0, wl, 0.02, 0.02, [0.5, 0.48, 0.42]);
+        for (let i=0;i<4;i++){ const x = -wl/2 + 0.8 + i*(wl - 1.6)/3, h = 0.7 + R()*0.4, c = [[0.88,0.86,0.8],[0.6,0.2,0.15],[0.85,0.85,0.75],[0.3,0.4,0.6]][(i + b.id) % 4];
+          vilQuad(SL.cloth, Fb, [x - 0.4, gy(2.1 - h), 0.01], [x + 0.4, gy(2.1 - h), 0.01], [x + 0.4, gy(2.08), 0.01], [x - 0.4, gy(2.08), 0.01], c, 1, 1); vilQuad(SL.cloth, Fb, [x + 0.4, gy(2.1 - h), -0.01], [x - 0.4, gy(2.1 - h), -0.01], [x - 0.4, gy(2.08), -0.01], [x + 0.4, gy(2.08), -0.01], c, 1, 1); } }
+    }
+    // materials and merged meshes
+    const masonry = masonryTex('vilStone', 7311, { course:30, w:[34, 80], mortar:3, a:[0.72, 0.68, 0.62], b:[0.55, 0.52, 0.47], k:4 });
+    const plankT = TEXCACHE.vilPlank ??= canvasTex(256, 256, (u, v) => { const row = Math.floor(v*8), f = v*8 - row, g = 0.78 + 0.22*fbm(u*3 + row*7.1, v*40, 3) + 0.06*Math.sin(u*90 + row*3); return [clamp(g*(f < 0.05 ? 0.55 : 1), 0, 1)*255, clamp(g*(f < 0.05 ? 0.55 : 1), 0, 1)*245, clamp(g*(f < 0.05 ? 0.55 : 1), 0, 1)*235]; });
+    const thatchT = TEXCACHE.vilThatch ??= canvasTex(256, 256, (u, v) => { const course = (v*6) % 1, g = (0.7 + 0.3*fbm(u*70, v*4, 3))*(0.75 + 0.25*smoothstep(0, 0.25, course)); return [g*255, g*250, g*235]; });
+    const tileT = TEXCACHE.vilTile ??= canvasTex(256, 256, (u, v) => { const row = Math.floor(v*10), q = u*8 + (row % 2)*0.5, col = Math.floor(q), f = q - col, fv = v*10 - row;
+      const g = (0.62 + 0.38*Math.sin(Math.PI*f))*(fv > 0.88 ? 0.5 : 0.85 + 0.15*fv)*(0.85 + 0.3*hash2(col, row)); return [g*255, g*248, g*240]; });
+    const matOf = {
+      stone:new THREE.MeshStandardMaterial({ vertexColors:true, map:masonry.map, normalMap:masonry.normal, roughness:0.9 }),
+      plaster:new THREE.MeshStandardMaterial({ vertexColors:true, map:tex.ground, roughness:0.95 }),
+      timber:new THREE.MeshStandardMaterial({ vertexColors:true, map:tex.bark, roughness:0.88 }),
+      wood:new THREE.MeshStandardMaterial({ vertexColors:true, map:plankT, roughness:0.85 }),
+      thatch:new THREE.MeshStandardMaterial({ vertexColors:true, map:thatchT, roughness:1.0 }),
+      tile:new THREE.MeshStandardMaterial({ vertexColors:true, map:tileT, roughness:0.78 }),
+      cloth:new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.9, side:THREE.DoubleSide }),
+      iron:new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.45, metalness:0.7 }),
+      ember:new THREE.MeshStandardMaterial({ vertexColors:true, color:0x1a0a04, emissive:0xff5a18, emissiveIntensity:2.5, roughness:1 })
+    };
+    const LIT = { value:new Float32Array(64) };
+    matOf.glass = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.18, metalness:0.3 });
+    matOf.glass.onBeforeCompile = sh => { sh.uniforms.uLit = LIT;
+      sh.vertexShader = 'attribute float aB; uniform float uLit[64]; varying float vLit;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vLit = uLit[int(aB + 0.5)];');
+      sh.fragmentShader = 'varying float vLit;\n' + sh.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n totalEmissiveRadiance += vec3(1.0, 0.55, 0.2)*vLit*2.4;'); };
+    matOf.glass.customProgramCacheKey = () => 'vilGlass';
+    for (const k of VIL_SLOTS){ const g = vilFinish(SL[k], k === 'glass'); if (!g) continue; const m = new THREE.Mesh(g, matOf[k]); m.castShadow = k !== 'glass' && k !== 'ember'; m.receiveShadow = true; group.add(m); }
+
+    // ---- watermill wheel and windmill sails (turning parts)
+    const mkPart = fill => { const S2 = vilSlots(); fill(S2); const g2 = new THREE.Group(); for (const k of VIL_SLOTS){ const g = vilFinish(S2[k]); if (g){ const m = new THREE.Mesh(g, matOf[k]); m.castShadow = true; m.receiveShadow = true; g2.add(m); } } return g2; };
+    const wheel = mkPart(S2 => { const Fw = vilFrame(0, 0, 0, 0), wc = [0.34, 0.25, 0.16];
+      for (const x of [-0.9, 0.9]){ const g = new THREE.TorusGeometry(3.1, 0.12, 6, 32); vilGeo(S2.wood, Fw, g, x, 0, 0, 1, 1, 1, wc, 0, Math.PI/2, 0); g.dispose(); for (let q=0;q<8;q++) vilBox(S2.wood, Fw, x, 0, 0, 0.12, 6.2, 0.14, wc, q*Math.PI/8); }
+      for (let q=0;q<20;q++){ const a = q/20*TAU; vilBox(S2.wood, Fw, 0, Math.cos(a)*3.15, Math.sin(a)*3.15, 2.0, 0.08, 0.7, wc, -a); }
+      vilGeo(S2.iron, Fw, U.cyl, 0, 0, 0, 0.35, 2.6, 0.35, [0.25, 0.25, 0.25], 0, 0, Math.PI/2); });
+    { const b = L.mill, wx = b.x + (b.W/2 - 1.6)*b.c + (b.D/2 + 3.2)*b.s, wz = b.z - (b.W/2 - 1.6)*b.s + (b.D/2 + 3.2)*b.c;
+      wheel.position.set(wx, 2.3, wz); wheel.rotation.y = b.ry; group.add(wheel); }
+    const wm = VIL_WMILL, wmG = heightAt(wm.x, wm.z), mill = new THREE.Group(); mill.position.set(wm.x, wmG - 0.3, wm.z); mill.scale.setScalar(1.3); group.add(mill);
+    mill.add(mkPart(S2 => { const Ft = vilFrame(0, 0, 0, 0), tc = [0.3, 0.22, 0.15];
+      for (const a of [0, Math.PI/2]){ vilBox(S2.timber, Ft, 0, 0.5, 0, 7, 0.4, 0.4, tc, 0, a, 0); vilBox(S2.stone, Ft, Math.cos(a)*3.3, 0.25, Math.sin(a)*3.3, 0.8, 0.8, 0.8, [0.55, 0.52, 0.48]); vilBox(S2.stone, Ft, -Math.cos(a)*3.3, 0.25, -Math.sin(a)*3.3, 0.8, 0.8, 0.8, [0.55, 0.52, 0.48]); }
+      for (let q=0;q<4;q++){ const a = q*Math.PI/2 + Math.PI/4; vilBeam(S2.timber, Ft, [Math.cos(a)*3.1, 0.6, Math.sin(a)*3.1], [0, 4.2, 0], 0.25, 0.25, tc); }
+      vilGeo(S2.timber, Ft, U.cyl, 0, 3.9, 0, 0.7, 7.4, 0.7, tc); }));
+    const body = mkPart(S2 => { const Fb = vilFrame(0, 0, 0, 0), bc = [0.2, 0.15, 0.1];
+      vilBox(S2.wood, Fb, 0, 8.0, 0, 4.2, 5.4, 5.2, bc, 0, 0, 0, 1.2); vilBox(S2.wood, Fb, 0, 5.35, 0, 4.4, 0.2, 5.4, bc.map(v => v*0.7));
+      vilQuad(S2.wood, Fb, [-2.3, 10.7, 2.8], [2.3, 10.7, 2.8], [2.3, 12.3, 0], [-2.3, 12.3, 0], bc.map(v => v*0.8), 1.2, 1.2); vilQuad(S2.wood, Fb, [2.3, 10.7, -2.8], [-2.3, 10.7, -2.8], [-2.3, 12.3, 0], [2.3, 12.3, 0], bc.map(v => v*0.8), 1.2, 1.2);
+      for (const sx of [-1, 1]) vilTri(S2.wood, Fb, sx > 0 ? [2.1, 10.7, 2.6] : [-2.1, 10.7, -2.6], sx > 0 ? [2.1, 10.7, -2.6] : [-2.1, 10.7, 2.6], [sx*2.1, 12.2, 0], bc);
+      vilBeam(S2.timber, Fb, [0, 5.6, -2.6], [0, 1.0, -8.5], 0.3, 0.3, [0.3, 0.22, 0.15]); for (let i=0;i<9;i++) vilBox(S2.wood, Fb, 0, 5.2 - i*0.55, -3.0 - i*0.6, 1.4, 0.08, 0.3, [0.35, 0.26, 0.17]);
+      for (const sx of [-0.7, 0.7]) vilBeam(S2.timber, Fb, [sx, 5.4, -2.7], [sx, 0.3, -7.6], 0.12, 0.12, [0.3, 0.22, 0.15]);
+      vilGeo(S2.iron, Fb, U.cyl, 0, 9.6, 2.9, 0.5, 1.4, 0.5, [0.3, 0.3, 0.3], Math.PI/2); vilBox(S2.glass, Fb, 2.12, 8.5, 0.8, 0.05, 0.8, 0.6, [0.05, 0.05, 0.06], 0, 0, 0, 1, 62); });
+    mill.add(body); body.position.y = 1.0;
+    const sails = mkPart(S2 => { const Fs = vilFrame(0, 0, 0, 0), sc = [0.35, 0.27, 0.18], cl = [0.86, 0.82, 0.72];
+      for (let q=0;q<4;q++){ const a = q*Math.PI/2, ca = Math.cos(a), sa = Math.sin(a), Fq = { ...Fs };
+        vilBox(S2.timber, Fs, ca*5.6, sa*5.6, 0, Math.abs(ca)*11.4 + 0.22, Math.abs(sa)*11.4 + 0.22, 0.22, sc);
+        const px = -sa, py = ca;   // across the sail
+        for (let i=0;i<7;i++){ const r = 2.2 + i*1.4; vilBeam(S2.timber, Fs, [ca*r, sa*r, 0.15], [ca*r + px*1.9, sa*r + py*1.9, 0.15], 0.06, 0.06, sc); }
+        vilBeam(S2.timber, Fs, [ca*2.0 + px*1.9, sa*2.0 + py*1.9, 0.15], [ca*11 + px*1.9, sa*11 + py*1.9, 0.15], 0.07, 0.07, sc);
+        const c0 = [ca*2.2 + px*0.15, sa*2.2 + py*0.15, 0.1], c1 = [ca*10.8 + px*0.15, sa*10.8 + py*0.15, 0.1], c2 = [ca*10.8 + px*1.85, sa*10.8 + py*1.85, 0.1], c3 = [ca*2.2 + px*1.85, sa*2.2 + py*1.85, 0.1];
+        vilQuad(S2.cloth, Fs, c0, c1, c2, c3, cl, 1, 1); } });
+    sails.position.set(0, 9.6, 3.7); sails.scale.setScalar(0.76); body.add(sails);
+
+    // ---- trees: woods on the hills, oaks in the hedgerows, poplars along the road, willows by the stream, the orchard
+    const lfOak = () => atlas('vilOak', 7321, { hue:0.26, sat:0.45, light:0.27, len:[50,80], width:0.36, count:[14,20], twig:'#4a3c28' });
+    const lfPop = () => atlas('vilPoplar', 7322, { hue:0.24, sat:0.42, light:0.33, len:[34,50], width:0.42, count:[18,26], twig:'#5a5040' });
+    const lfWil = () => atlas('vilWillow', 7323, { hue:0.25, sat:0.34, light:0.32, len:[60,84], width:0.13, count:[24,32], twig:'#6a5a3a' });
+    const lfApp = () => atlas('vilApple', 7324, { hue:0.27, sat:0.5, light:0.24, len:[36,52], width:0.42, count:[16,22], twig:'#4a3a28' });
+    defineSpecies('vilOak', { seed:7331, leaves:lfOak, bark:0x8a7e6e, tree:{ h:18, r:0.75, buttress:0.5, fins:5, lean:0.08, wobble:1.1, trunkTop:0.6, bStart:0.35, branches:10, el:[0.2,0.7], bLen:0.4, curl:0.18, subs:2, cR:3.4, flatY:0.7, cards:30, card:2.0, droop:0.15 } });
+    defineSpecies('vilPoplar', { seed:7332, leaves:lfPop, bark:0x9a9284, flutter:0.06, tree:{ h:22, r:0.4, buttress:0.2, fins:4, lean:0.02, wobble:0.3, trunkTop:0.95, bStart:0.1, branches:22, el:[1.1,1.4], bLen:0.1, curl:0.1, subs:2, cR:2.0, flatY:1.6, cards:44, card:1.05, droop:0.0 } });
+    defineSpecies('vilWillow', { seed:7333, leaves:lfWil, bark:0x7a6e60, flutter:0.05, tree:{ h:11, r:0.6, buttress:0.4, fins:4, lean:0.25, wobble:1.4, trunkTop:0.5, bStart:0.4, branches:9, el:[0.3,0.9], bLen:0.45, curl:-0.1, subs:2, cR:2.6, flatY:0.95, cards:30, card:2.2, droop:0.9 } });
+    defineSpecies('vilApple', { seed:7334, leaves:lfApp, bark:0x6e6052, tree:{ h:5.5, r:0.22, buttress:0.1, fins:4, lean:0.25, wobble:0.8, trunkTop:0.5, bStart:0.3, branches:8, el:[0.3,0.8], bLen:0.5, curl:0.15, subs:2, cR:1.7, flatY:0.65, cards:22, card:1.2, droop:0.2 } });
+    const Fo = k.forest(), tint = () => new THREE.Color(0.85 + R()*0.3, 0.88 + R()*0.24, 0.82 + R()*0.3), clearT = (x, z, m = 4) => L.roadAt(x, z) > m && L.occAt(x, z) !== 1 && heightAt(x, z) > 0.8 && !L.fieldAt(x, z) && vilWallD(x, z) > 1.08;
+    for (let i=0;i<9000;i++){ const x = (R() - 0.5)*3000, z = -150 + (R() - 0.5)*3000, r = Math.hypot(x*0.85, z + 120), wood = smoothstep(0.42, 0.62, 0.5 + perlin(x*0.004 + 11, z*0.004)*0.9);
+      if (r < 640 || R() > wood*smoothstep(600, 800, r)*0.9 || !clearT(x, z)) continue; Fo.add('vilOak', x, heightAt(x, z) - 0.3, z, 0.7 + R()*0.6, R()*TAU, tint()); }
+    for (let x = -600; x <= 600; x += 34 + R()*30) for (const z of [320, -150]){ if (z < 0 && Math.abs(x) < 160) continue; const xx = x + (R() - 0.5)*6, zz = z + (R() - 0.5)*2; if (L.roadAt(xx, zz) > 3) Fo.add('vilOak', xx, heightAt(xx, zz) - 0.3, zz, 0.75 + R()*0.45, R()*TAU, tint()); }
+    for (let z = 70; z < 640; z += 17){ const x = vilSouthX(z); for (const sx of [-1, 1]){ if (Math.abs(z - 175) < 8 || Math.abs(z - 470) < 8) continue; Fo.add('vilPoplar', x + sx*8.2, heightAt(x + sx*8.2, z) - 0.2, z, 0.85 + R()*0.25, R()*TAU, tint()); } }
+    for (let x = -700; x < 700; x += 14 + R()*20){ const sz = vilStreamZ(x), w = 5.5 + 19*vilPondK(x); for (const sg of [-1, 1]){ if (R() < 0.45) continue; const z = sz + sg*(w + 1 + R()*5); if (vilOnBridge(x, z) || Math.abs(x) < 14 || L.occAt(x, z) === 1 || heightAt(x, z) < 0.3) continue; Fo.add('vilWillow', x, heightAt(x, z) - 0.3, z, 0.8 + R()*0.45, R()*TAU, tint()); } }
+    for (let x = -270; x < -145; x += 11) for (let z = -335; z < -190; z += 10){ const xx = x + (R() - 0.5)*2, zz = z + (R() - 0.5)*2; if (L.roadAt(xx, zz) > 2) Fo.add('vilApple', xx, heightAt(xx, zz) - 0.1, zz, 0.85 + R()*0.3, R()*TAU, tint()); }
+    for (const [x, z, s] of [[12, -246.5, 1.1], [-20, -287, 0.9], [18, -290, 0.8], [-60, -258, 0.9], [55, -200, 0.85], [-50, -175, 0.8]]) Fo.add('vilOak', x, heightAt(x, z) - 0.3, z, s, R()*TAU);
+    group.add(Fo.build());
+
+    // ---- ground cover: meadow grass, grain with ears, cabbage rows, flowers, reeds
+    const sc = [];
+    const meadow = bladeClump({ blades:8, seg:2, h:[0.2,0.45], w:0.03, spread:0.3, bend:0.6, colA:lin(0.12,0.2,0.06), colB:lin(0.42,0.55,0.22), seed:7341 });
+    const grain = bladeClump({ blades:6, seg:2, h:[0.75,1.0], w:0.02, spread:0.14, bend:0.25, colA:lin(0.42,0.38,0.16), colB:lin(0.85,0.72,0.38), ear:0.11, earW:0.013, earSeg:1, earCol:lin(0.86,0.7,0.36), seed:7342 });
+    const cabbage = broadleafPlant(7343, { leaves:6, len:0.34, dark:[0.12,0.26,0.12], light:[0.42,0.6,0.36] });
+    const flower = bladeClump({ blades:4, seg:2, h:[0.25,0.45], w:0.012, spread:0.15, bend:0.3, colA:lin(0.12,0.22,0.08), colB:lin(0.24,0.36,0.14), ear:0.04, earW:0.04, earSeg:1, earCol:lin(1,1,1), seed:7344 });
+    const reed = bladeClump({ blades:9, seg:3, h:[1.1,1.9], w:0.02, spread:0.35, bend:0.3, colA:lin(0.2,0.24,0.1), colB:lin(0.55,0.58,0.3), ear:0.16, earW:0.02, earSeg:1, earCol:lin(0.35,0.25,0.15), seed:7345 });
+    const free = (x, z) => L.occAt(x, z) !== 1 && L.roadAt(x, z) > 0.25;
+    sc.push(scatter({ geo:meadow, mat:plantMat({ wind:0.06, back:0.9 }), tile:32, radius:62, per:0.5, seed:7351, place:(x, z, r) => { const y = heightAt(x, z), fc = L.fieldAt(x, z);
+      if (y < 0.5 || (fc && fc !== 5) || !free(x, z) || vilWallD(x, z) < 1 && r() < 0.75) return null; const lush = 0.5 + 0.5*perlin(x*0.006 + 2, z*0.006); return { y:y - 0.03, s:0.8 + r()*0.6 + (fc === 5 ? 0.7 : 0), c:new THREE.Color(0.85 + r()*0.25 + lush*0.1, 0.9 + r()*0.2, 0.8 + r()*0.2) }; } }));
+    sc.push(scatter({ geo:grain, mat:plantMat({ wind:0.05, back:1.1 }), tile:32, radius:56, per:0.85, seed:7352, place:(x, z, r) => { const fc = L.fieldAt(x, z); if (fc !== 1 && fc !== 2) return null;
+      return { y:heightAt(x, z) - 0.03, s:0.9 + r()*0.25, sy:fc === 2 ? 0.85 : 1, c:fc === 2 ? new THREE.Color(1.05 + r()*0.1, 1.08, 0.95 + r()*0.1) : new THREE.Color(0.95 + r()*0.12, 0.92 + r()*0.08, 0.85) }; } }));
+    sc.push(scatter({ geo:cabbage, mat:plantMat({ wind:0.02, back:0.6 }), tile:32, radius:40, per:0.9, seed:7353, place:(x, z, r) => { if (L.fieldAt(x, z) !== 3 || Math.abs(x/0.75 - Math.round(x/0.75)) > 0.14) return null; return { y:heightAt(x, z) - 0.02, s:0.8 + r()*0.5 }; } }));
+    const flowerCol = [[1.3,1.15,0.2],[1.25,1.25,1.2],[1.3,0.25,0.18],[0.35,0.5,1.3],[1.2,0.6,1.0]];
+    sc.push(scatter({ geo:flower, mat:plantMat({ wind:0.08, back:0.9 }), tile:32, radius:45, per:0.25, seed:7354, place:(x, z, r) => { const fc = L.fieldAt(x, z), y = heightAt(x, z);
+      if (y < 0.6 || !free(x, z) || vilWallD(x, z) < 1) return null; if (fc && fc !== 5 && fc !== 6) return null; if (!fc && r() > 0.35) return null;
+      const c = fc === 6 ? flowerCol[3] : flowerCol[(r()*5)|0]; return { y:y - 0.03, s:0.8 + r()*0.5, c:new THREE.Color(...c) }; } }));
+    sc.push(scatter({ geo:reed, mat:plantMat({ wind:0.07, back:1.0 }), tile:32, radius:55, per:0.6, seed:7355, place:(x, z, r) => { const y = heightAt(x, z); if (y < -0.5 || y > 0.9 || vilOnBridge(x, z) || L.occAt(x, z) === 1) return null; return { y:y - 0.05, s:0.8 + r()*0.5 }; } }));
+    sc.forEach(o => group.add(o.group));
+
+    // ---- destructible cover: one instanced mesh per kind, debris pools
+    const KINDS = { fence:{ hp:30, fl:1, deb:'plank', n:5 }, crate:{ hp:25, fl:1, deb:'plank', n:6 }, barrel:{ hp:35, fl:0.8, deb:'plank', n:5 }, bale:{ hp:18, fl:1.4, deb:'straw', n:7 }, stack:{ hp:60, fl:1.4, deb:'straw', n:16 },
+      cart:{ hp:55, fl:0.9, deb:'plank', n:9 }, wall:{ hp:120, fl:0, deb:'stone', n:9 }, hedge:{ hp:70, fl:0.6, deb:'leaf', n:9 }, logs:{ hp:50, fl:0.9, deb:'plank', n:7 } };
+    const coverMat = new THREE.MeshStandardMaterial({ vertexColors:true, map:plankT, roughness:0.88 }), coverStone = new THREE.MeshStandardMaterial({ vertexColors:true, map:masonry.map, roughness:0.92 }), coverLeaf = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.8 });
+    const coverStraw = new THREE.MeshStandardMaterial({ vertexColors:true, map:thatchT, roughness:1 });
+    const items = L.items.map(q => ({ ...q })), hashI = new Map(), hk = (x, z) => Math.floor(x/8) + ',' + Math.floor(z/8);
+    for (const t in KINDS){ const all = items.filter(q => q.t === t); if (!all.length) continue; const geo = vilCoverGeo(t, 7360 + Object.keys(KINDS).indexOf(t));
+      const mat = t === 'wall' ? coverStone : t === 'hedge' ? coverLeaf : t === 'bale' || t === 'stack' ? coverStraw : coverMat, tiles = new Map();
+      for (const q of all){ const kk = Math.floor(q.x/160) + ',' + Math.floor(q.z/160); if (!tiles.has(kk)) tiles.set(kk, []); tiles.get(kk).push(q); }
+      for (const list of tiles.values()){ const m = new THREE.InstancedMesh(geo, mat, list.length); m.castShadow = true; m.receiveShadow = true; group.add(m);
+      list.forEach((q, i) => { q.i = i; q.m = m; q.y = vilWalkY(q.x, q.z) - (t === 'wall' || t === 'hedge' ? 0.12 : 0.03); q.hp = KINDS[t].hp*(0.85 + R()*0.3); q.max = q.hp; q.burn = 0; q.fuel = 1; q.char = 0; q.dead = false; q.grow = 1; q.tone = 0.85 + R()*0.3;
+        const kk = hk(q.x, q.z); if (!hashI.has(kk)) hashI.set(kk, []); hashI.get(kk).push(q); }); } }
+    const setItem = q => { const m = q.m, s = q.dead ? (q.t === 'hedge' && q.grow < 1 ? Math.max(0.001, q.grow) : 0.001) : q.grow*(q.t === 'hedge' ? 0.92 + 0.08*q.hp/q.max : 1);
+      dm.position.set(q.x, q.y - (q.dead && q.t !== 'hedge' ? 50 : 0), q.z); dm.rotation.set(0, q.ry, 0); dm.scale.set(s, s, s); dm.updateMatrix(); m.setMatrixAt(q.i, dm.matrix);
+      const ch = 1 - 0.85*q.char, tn = q.tone; m.setColorAt(q.i, new THREE.Color(tn*ch, tn*ch, tn*ch)); m.instanceMatrix.needsUpdate = true; m.instanceColor.needsUpdate = true; };
+    items.forEach(q => { if (q.m) setItem(q); });
+    for (const q of items) if (q.m && !q.m.boundingSphere) q.m.computeBoundingSphere();
+    const near = (x, z, r) => { const out = []; for (let gx = Math.floor((x - r)/8); gx <= Math.floor((x + r)/8); gx++) for (let gz = Math.floor((z - r)/8); gz <= Math.floor((z + r)/8); gz++){ const a = hashI.get(gx + ',' + gz); if (a) for (const q of a) if (Math.hypot(q.x - x, q.z - z) < r) out.push(q); } return out; };
+    const debG = { plank:new THREE.BoxGeometry(0.9, 0.09, 0.16), stone:boulderGeo(7371, 1), straw:new THREE.BoxGeometry(0.5, 0.18, 0.35), leaf:new THREE.IcosahedronGeometry(0.35, 0) };
+    for (const g of Object.values(debG)) if (!OWNED.includes(g)) OWNED.push(g);
+    const debM = { plank:coverMat, stone:coverStone, straw:coverStraw, leaf:coverLeaf }, debC = { plank:[0.45, 0.33, 0.2], stone:[1.6, 1.55, 1.45], straw:[0.85, 0.7, 0.38], leaf:[0.2, 0.34, 0.1] }, DEB = {};
+    for (const k2 in debG){ const m = new THREE.InstancedMesh(debG[k2], debM[k2], 700); m.count = 0; m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false; group.add(m); DEB[k2] = { m, P:[], next:0 }; }
+    const spawnDebris = (q, ox, oz, power, charred) => { const K = KINDS[q.t], D = DEB[K.deb];
+      for (let i=0;i<K.n;i++){ const dx = q.x - ox, dz = q.z - oz, dl = Math.hypot(dx, dz) || 1, sp = power*(0.5 + R());
+        const p = { x:q.x + (R() - 0.5)*1.4, y:q.y + 0.3 + R()*0.8, z:q.z + (R() - 0.5)*1.4, vx:dx/dl*sp + (R() - 0.5)*2, vy:2 + R()*power*0.8, vz:dz/dl*sp + (R() - 0.5)*2, rx:R()*6, ry:R()*6, rz:R()*6, w:(R() - 0.5)*10, s:0.7 + R()*0.6, live:true, char:charred ? 0.15 : 1 };
+        const slot = D.next++ % 700; D.P[slot] = p; p.slot = slot; D.m.count = Math.max(D.m.count, Math.min(700, D.next));
+        const c = debC[K.deb]; D.m.setColorAt(slot, new THREE.Color(c[0]*p.char, c[1]*p.char, c[2]*p.char)); D.m.instanceColor.needsUpdate = true; } };
+    const breakItem = (q, ox, oz, power, charred) => { if (q.dead) return; q.dead = true; q.grow = 0; q.burn = 0; stats.broken++; spawnDebris(q, ox, oz, power, charred); setItem(q); if (q.t === 'fence') for (const P of VIL_PENS) if (P.segs?.some(s => s.x === q.x && s.z === q.z)) P.open = true; };
+    const stats = { broken:0, burning:0 };
+
+    // ---- livestock in their pens, chickens in the yards
+    const herds = [];
+    for (const P of VIL_PENS){ const kinds = P.kind === 'cow' ? ['cow', 'brown'] : [P.kind], n = P.kind === 'cow' ? 9 : P.kind === 'sheep' ? 22 : 6;
+      for (const kd of kinds){ const B = VIL_BEASTS[kd], geo = savannaBeastGeo(B), mesh = new THREE.InstancedMesh(geo, savannaBeastMat(B), n), aLeg = new THREE.InstancedBufferAttribute(new Float32Array(n*4), 4);
+        geo.setAttribute('aLeg', aLeg); mesh.frustumCulled = false; mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh);
+        const H = { P, B, mesh, aLeg, members:[] }; for (let i=0;i<n;i++){ const x = lerp(P.x0 + 2, P.x1 - 2, R()), z = lerp(P.z0 + 2, P.z1 - 2, R()); H.members.push({ x, z, tx:x, tz:z, hd:R()*TAU, ph:R()*6, v:0, g:R(), t:R()*8, s:0.9 + R()*0.2 });
+          mesh.setColorAt(i, new THREE.Color(0.9 + R()*0.2, 0.9 + R()*0.2, 0.9 + R()*0.2)); } herds.push(H); } }
+    const henG = (() => { const b = geoBuf(); tubeInto(b, [V3(0, 0.22, -0.16), V3(0, 0.28, 0), V3(0, 0.3, 0.12), V3(0, 0.42, 0.16)], [0.06, 0.15, 0.12, 0.06], 8, {}); tubeInto(b, [V3(0, 0.42, 0.16), V3(0, 0.47, 0.19)], [0.06, 0.04], 6, {});
+      for (const sx of [-1, 1]) tubeInto(b, [V3(sx*0.05, 0.18, 0), V3(sx*0.05, 0.0, 0.02)], [0.015, 0.012], 4, {}); const g = owned(geoFinish(b)), p = g.attributes.position, c = g.attributes.color;
+      for (let i=0;i<p.count;i++){ const y = p.getY(i); const col = y < 0.16 ? [0.8, 0.6, 0.2] : y > 0.44 ? [0.8, 0.15, 0.1] : [1, 1, 1]; c.setXYZ(i, ...col); } return g; })();
+    const hens = new THREE.InstancedMesh(henG, new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.85 }), 26), henD = [];
+    const yards = L.blds.filter(b => b.name === 'a cottage' || b.name === 'a farmhouse').slice(0, 5);
+    for (let i=0;i<26;i++){ const b = yards[i % Math.max(1, yards.length)], bx = b ? b.x - (b.D/2 + 5)*b.s : 36, bz = b ? b.z - (b.D/2 + 5)*b.c : 30; henD.push({ cx:bx, cz:bz, x:bx + (R() - 0.5)*6, z:bz + (R() - 0.5)*6, hd:R()*6, t:R()*3, peck:0 });
+      hens.setColorAt(i, R() < 0.5 ? new THREE.Color(0.95, 0.92, 0.85) : new THREE.Color(0.6, 0.35, 0.18)); }
+    hens.frustumCulled = false; hens.castShadow = true; group.add(hens);
+
+    // ---- villagers, the road graph and their day
+    const nodes = [], adj = [];
+    const addNode = (x, z) => { nodes.push([x, z]); adj.push([]); return nodes.length - 1; };
+    const link = (a, b) => { const d = Math.hypot(nodes[a][0] - nodes[b][0], nodes[a][1] - nodes[b][1]); adj[a].push([b, d]); adj[b].push([a, d]); };
+    for (const r of VIL_ROADS){ let prev = -1, acc = 99; const p = r.path; for (let i=0;i<p.length;i++){ if (i > 0) acc += Math.hypot(p[i][0] - p[i-1][0], p[i][1] - p[i-1][1]); if (acc < 7 && i < p.length - 1) continue; acc = 0; const n = addNode(p[i][0], p[i][1]); if (prev >= 0) link(prev, n); prev = n; } }
+    const nR = nodes.length; for (let a=0;a<nR;a++) for (let b=a+1;b<nR;b++) if (Math.hypot(nodes[a][0] - nodes[b][0], nodes[a][1] - nodes[b][1]) < 6.5 && !adj[a].some(e => e[0] === b)) link(a, b);
+    for (const [x0, z0, x1, z1] of [[VIL_SQ.x0, VIL_SQ.z0, VIL_SQ.x1, VIL_SQ.z1]]) for (let x = x0 + 4; x < x1; x += 8) for (let z = z0 + 4; z < z1; z += 8){ const n = addNode(x, z); for (let m=0;m<nodes.length-1;m++) if (Math.hypot(nodes[m][0] - x, nodes[m][1] - z) < 11) link(n, m); }
+    const nearestNode = (x, z) => { let best = 0, bd = 1e9; for (let i=0;i<nodes.length;i++){ const d = (nodes[i][0] - x)**2 + (nodes[i][1] - z)**2; if (d < bd){ bd = d; best = i; } } return best; };
+    for (const b of L.blds){ const n = addNode(b.door[0], b.door[1]); let best = -1, bd = 1e9; for (let i=0;i<nR;i++){ const d = Math.hypot(nodes[i][0] - b.door[0], nodes[i][1] - b.door[1]); if (d < bd){ bd = d; best = i; } } link(n, best); b.node = n; }
+    const dist = new Float32Array(nodes.length), prevN = new Int32Array(nodes.length), done = new Uint8Array(nodes.length);
+    const route = (a, b) => { dist.fill(1e9); prevN.fill(-1); done.fill(0); dist[a] = 0;
+      for (let it=0; it<nodes.length; it++){ let u = -1, ud = 1e9; for (let i=0;i<nodes.length;i++) if (!done[i] && dist[i] < ud){ ud = dist[i]; u = i; } if (u < 0 || u === b) break; done[u] = 1;
+        for (const [v, w] of adj[u]) if (dist[u] + w < dist[v]){ dist[v] = dist[u] + w; prevN[v] = u; } }
+      const out = []; for (let v = b; v >= 0; v = prevN[v]){ out.push(nodes[v]); if (v === a) break; } return out.reverse(); };
+    const homes = L.blds.filter(b => b.name === 'a house' || b.name === 'a cottage' || b.name === 'a farmhouse' || b.enter === 'house' || b.enter === 'tavern');
+    const fieldSpot = () => { for (let k2=0;k2<60;k2++){ const x = (R() - 0.5)*700, z = 60 + R()*360; const fc = L.fieldAt(x, z); if (fc && fc !== 5) return [x, z]; } return [40, 120]; };
+    const jobs = [['smith', 2], ['carpenter', 2], ['miller', 2], ['herd', 3], ['kiln', 2], ['keeper', 2], ['trader', 6], ['windmill', 1], ['priest', 1]];
+    const jobSpot = j => { switch (j){
+      case 'smith': return { x:L.smithy.x - 1.5*L.smithy.s + 0.6, z:L.smithy.z - 0.5, name:'workshops' };
+      case 'carpenter': return { x:-17, z:-152 + (R() - 0.5)*5, name:'workshops' };
+      case 'miller': return { x:L.mill.door[0] + (R() - 0.5)*3, z:L.mill.door[1] + 0.5, name:'workshops' };
+      case 'herd': { const P = VIL_PENS[(R()*2)|0]; return { x:P.x0 - 2, z:(P.z0 + P.z1)/2 + (R() - 0.5)*6, name:'pens' }; }
+      case 'kiln': return { x:VIL_KILNS[0][0] + (R() - 0.5)*6, z:VIL_KILNS[0][1] + 7, name:'workshops' };
+      case 'keeper': return { x:L.tavern.door[0], z:L.tavern.door[1], enter:L.tavern, name:'tavern' };
+      case 'trader': { const s = L.stalls[(R()*L.stalls.length)|0]; return { x:s[0], z:s[1], name:'market' }; }
+      case 'windmill': return { x:VIL_WMILL.x - 4, z:VIL_WMILL.z - 8, name:'workshops' };
+      case 'priest': return { x:L.church.door[0], z:L.church.door[1], enter:L.church, name:'church' };
+      default: { const f = fieldSpot(); return { x:f[0], z:f[1], name:'fields', field:true }; } } };
+    const tunics = [[0.35,0.1,0.06],[0.08,0.14,0.32],[0.25,0.22,0.08],[0.3,0.22,0.12],[0.1,0.2,0.08],[0.22,0.2,0.18],[0.2,0.08,0.16],[0.42,0.32,0.16],[0.5,0.45,0.36]];
+    const NP = 64, people = [], perM = new THREE.InstancedMesh(vilPersonGeo(), vilPersonMat(), NP), aWalk = new THREE.InstancedBufferAttribute(new Float32Array(NP*4), 4);
+    perM.geometry.setAttribute('aWalk', aWalk); perM.castShadow = true; perM.receiveShadow = true; perM.frustumCulled = false; group.add(perM);
+    const jl = []; for (const [j, n] of jobs) for (let i=0;i<n;i++) jl.push(j);
+    for (let i=0;i<NP;i++){ const home = homes[i % homes.length], job = jl[i] || 'field';
+      people.push({ i, home, job, work:jobSpot(job), x:home.door[0], z:home.door[1], hd:R()*6, path:[], pi:0, mode:'in', act:'home', plan:null, react:0, sp:1.2 + R()*0.35, ph:R()*6, bend:0, sit:0, brave:R() < 0.65, tavern:R() < 0.3, social:R() < 0.5, seat:null });
+      perM.setColorAt(i, new THREE.Color(...tunics[(R()*tunics.length)|0]).multiplyScalar(0.8 + R()*0.4)); }
+    const tavSeats = L.tavern.seats.map(s => ({ x:L.tavern.x + s[0]*L.tavern.c + s[1]*L.tavern.s, z:L.tavern.z - s[0]*L.tavern.s + s[1]*L.tavern.c, f:s[2], who:null }));
+    let fire = null, fireHold = 0, phase = '', rainy = false, jumped = false, burnT = 0, fightT = 0, firstPlan = true;
+    const phaseOf = env => { const el = S.sun[1], az = S.sun[0]; if (env.night > 0.5 || el < -0.05) return 'night'; if (el > 0.55) return 'noon'; return az < -0.35 ? 'dawn' : 'dusk'; };
+    const target = (p, env) => {
+      if (fire && Math.hypot(fire.x - p.x, fire.z - p.z) < 320){ if (p.brave){ const a = Math.atan2(p.z - fire.z, p.x - fire.x) + (R() - 0.5)*0.8; return { x:fire.x + Math.cos(a)*5, z:fire.z + Math.sin(a)*5, act:'fire' }; }
+        return { x:2 + (R() - 0.5)*30, z:-226 + (R() - 0.5)*20, act:'fled' }; }
+      if (rainy && phase !== 'night'){ const tv = L.tavern, dh = Math.hypot(p.home.door[0] - p.x, p.home.door[1] - p.z), dt = Math.hypot(tv.door[0] - p.x, tv.door[1] - p.z);
+        const b = dt < dh ? tv : p.home; return { x:b.door[0], z:b.door[1], enter:b, act:'shelter' }; }
+      if (phase === 'night' || (phase === 'dusk' && !p.tavern)){ if (p.tavern && phase === 'night') return { x:L.tavern.door[0], z:L.tavern.door[1], enter:L.tavern, act:'tavern' };
+        if (phase === 'dusk' && p.tavern) return { x:L.tavern.door[0], z:L.tavern.door[1], enter:L.tavern, act:'tavern' };
+        return { x:p.home.door[0], z:p.home.door[1], enter:p.home, act:'home' }; }
+      if (phase === 'dusk') return { x:L.tavern.door[0], z:L.tavern.door[1], enter:L.tavern, act:'tavern' };
+      if (phase === 'noon' && p.social && p.job === 'field'){ const s = L.stalls[(R()*L.stalls.length)|0]; return { x:s[0] + (R() - 0.5)*3, z:s[1] + (R() - 0.5)*2, act:'market' }; }
+      const w = p.work; return { x:w.x, z:w.z, enter:w.enter, act:w.name, field:w.field };
+    };
+    const leaveSeat = p => { if (p.seat){ p.seat.who = null; p.seat = null; } p.sit = 0; };
+    const plan = (p, env, teleport, jump) => {
+      const g = target(p, env); p.plan = g; leaveSeat(p);
+      if (teleport){ if (g.enter){ p.x = g.x; p.z = g.z; p.mode = 'in'; p.inB = g.enter; } else { p.x = g.x; p.z = g.z; p.mode = 'at'; } p.act = g.act; p.path = []; enterSeat(p); return; }
+      const start = p.mode === 'in' && p.inB ? p.inB.door : [p.x, p.z]; if (p.mode === 'in'){ p.x = start[0]; p.z = start[1]; }
+      const a = nearestNode(p.x, p.z), b = g.enter ? g.enter.node : nearestNode(g.x, g.z), r = g.act === 'fire' || g.act === 'fled' ? [] : a === b ? [nodes[a]] : route(a, b);   // to a fire: straight across the fields
+      p.path = [...r, [g.x, g.z]]; p.pi = 0; p.mode = 'walk'; p.act = g.act; p.inB = null;
+      if (jump){ let tot = 0; for (let i=1;i<p.path.length;i++) tot += Math.hypot(p.path[i][0] - p.path[i-1][0], p.path[i][1] - p.path[i-1][1]);   // time skipped: already part way there
+        let go = tot*(0.25 + R()*0.7), x = p.x, z = p.z; while (p.pi < p.path.length - 1){ const q = p.path[p.pi], l = Math.hypot(q[0] - x, q[1] - z); if (l > go){ x += (q[0] - x)*go/l; z += (q[1] - z)*go/l; break; } go -= l; x = q[0]; z = q[1]; p.pi++; } p.x = x; p.z = z; }
+    };
+    const enterSeat = p => { if (p.mode !== 'in' || p.inB !== L.tavern || (p.act !== 'tavern' && p.act !== 'shelter')) return; const s = tavSeats.find(q => !q.who); if (s){ s.who = p; p.seat = s; } };
+    const fieldsFire = () => { const B = SURF.burning; if (!B.length) return null; let best = null, bd = 1e9; for (let i=0;i<B.length;i+=Math.max(1, (B.length/80)|0)){ const q = B[i], d = Math.hypot(q.x - 0, q.z + 150); if (d < bd){ bd = d; best = q; } } return bd < 520 ? best : null; };
+
+    // ---- lights: hearth inside the building you are in, the forge, lanterns and chimney smoke
+    const hearthL = new THREE.PointLight(0xff8a3a, 0, 16, 2), forgeL = new THREE.PointLight(0xff7020, 0, 18, 2); group.add(hearthL, forgeL);
+    forgeL.position.set(...L.smithy.hearth);
+    const lantern = new THREE.SpriteMaterial({ map:tex.glow, color:0xffb060, blending:THREE.AdditiveBlending, transparent:true, depthWrite:false, fog:false, opacity:0 });
+    for (const [x, z, h] of [[-3.2, -134, 4.2], [3.2, -134, 4.2], [-3.2, -326, 4.2], [3.2, -326, 4.2], [25.6, -229, 2.6], [L.church.door[0], L.church.door[1] + 1, 3.4], [-6, -226, 3.4], [0, -38, 0], [-2, -170, 3.0], [L.mill.door[0], L.mill.door[1], 2.4], [L.houseA.door[0], L.houseA.door[1], 2.6]]){
+      const sp = new THREE.Sprite(lantern); sp.position.set(x, (h ? vilWalkY(x, z) + h : VIL_BR.deck(z) + 1.6), z); sp.scale.setScalar(1.6); group.add(sp); }
+    const chims = L.blds.filter(b => b.smoke).map(b => b.smoke).concat(VIL_KILNS.map(([x, z]) => [x, heightAt(x, z) + 4.4, z]));
+    const smoke = puffField({ count:Math.min(260, chims.length*7), seed:7381, life:14, rise:16, spread:4, size:[0.8, 6], drift:[0, 0, 0], opacity:0.45, colA:[0.5,0.48,0.46], colB:[0.72,0.72,0.72], order:4, emit:i => chims[i % chims.length] });
+    group.add(smoke);
+    const forgeSmoke = puffField({ count:24, seed:7382, life:3, rise:6, spread:0.6, size:[0.2, 1.4], opacity:0.0, colA:[1,0.8,0.5], colB:[1,0.5,0.2], glow:[1.4,0.6,0.15], order:5, emit:() => [L.smithy.hearth[0], L.smithy.hearth[1] - 0.4, L.smithy.hearth[2]] });
+    group.add(forgeSmoke);
+    // rooks round the church tower, swallows over the fields
+    const birds = new THREE.InstancedMesh(gullGeo(), critterMat('wing'), 30), birdD = [];
+    for (let i=0;i<30;i++){ const rook = i < 14; birdD.push({ cx:rook ? -8.5 : (R() - 0.5)*400, cz:rook ? -262 : 120 + R()*300, rad:rook ? 14 + R()*30 : 20 + R()*60, w:(rook ? 0.35 : 0.7)*(R() < 0.5 ? -1 : 1), a:R()*TAU, h:rook ? 32 + R()*14 : 4 + R()*6, ph:R()*9, s:rook ? 0.5 : 0.3 });
+      birds.setColorAt(i, rook ? new THREE.Color(0.05, 0.05, 0.06) : new THREE.Color(0.12, 0.13, 0.2)); }
+    birds.frustumCulled = false; group.add(birds);
+
+    // ---- building lookup for floors, ceilings and "where am I"
+    const bAt = (x, z) => { const a = L.bgrid.get(Math.floor(x/16) + ',' + Math.floor(z/16)); if (!a) return null;
+      for (const b of a){ const dx = x - b.x, dz = z - b.z, lx = dx*b.c - dz*b.s, lz = dx*b.s + dz*b.c; if (Math.abs(lx) < b.W/2 && lz > -b.D/2 && lz < b.D/2 + b.jet) return { b, lx, lz }; } return null; };
+    const inStair = (b, lx, lz) => b.stair && lx > b.stair.xs0 - 0.05 && lx < b.stair.xs1 + 0.05 && lz < b.stair.zb && lz > b.stair.zb - b.stair.run - 0.2;
+    const levelOf = (h, y) => { const b = h.b, ly = y - 1.8 - b.fy0; const R0 = vilRoofAt(b, h.lx, h.lz);
+      if (R0 && ly > R0.under - 0.5) return { floor:b.fy0 + R0.top, roof:Infinity, where:'roof' };
+      if (inStair(b, h.lx, h.lz)) return { floor:b.fy0 + clamp((b.stair.zb - h.lz)/b.stair.run, 0, 1)*b.H, roof:b.fy0 + (R0 ? R0.under : b.H*2), where:'stairs' };
+      if (b.st === 2 && ly > b.H - 0.5) return { floor:b.fy0 + b.H, roof:b.fy0 + (R0 ? R0.under : b.H + b.H2), where:'upstairs' };
+      if (b.shed) return { floor:Math.max(heightAt(h.b.x, h.b.z), b.fy0 - 0.3), roof:b.fy0 + (R0 ? R0.under : b.H), where:'shed' };
+      return { floor:b.fy0, roof:b.fy0 + (b.st === 2 ? b.H - 0.16 : (R0 ? R0.under : b.H)), where:'ground floor' }; };
+    let inside = null, lastEnv = null, lightT = 0;
+    const CROP = { id:'vegetation', flammability:0.52 }, GREEN = { id:'vegetation', flammability:0.3 };   // ripe grain burns, green pasture and crops less so
+
+    const world = { group, heightAt, ownsFireStatus:true, lightK:1, envK:1, exposureK:1,
+      floorAt(x, z, y){ const h = bAt(x, z); if (h) return levelOf(h, y).floor;
+        if (vilOnBridge(x, z)){ const d = VIL_BR.deck(z); return y - 1.8 > d - 1.4 ? d : heightAt(x, z); }
+        if (iceK > 0.6 && heightAt(x, z) < 0 && Math.hypot(x - VIL_MILL.x, (z - vilStreamZ(x))*2) < 70) return 0.08;
+        return heightAt(x, z); },
+      ceilingAt(x, z, y){ const h = bAt(x, z); if (h) return levelOf(h, y).roof;
+        if (vilOnBridge(x, z)){ const d = VIL_BR.deck(z), a = VIL_BR.arch(z); if (y - 1.8 <= d - 1.4 && a > -2) return a; } return Infinity; },
+      materialAt(x, z){ const y = heightAt(x, z); if (y < 0.05) return 'water';
+        if (near(x, z, 2).some(q => !q.dead && KINDS[q.t].fl > 0.5)) return 'wood';
+        const e = L.roadAt(x, z); if (e < 0.5){ const k2 = vilIdx(x, z); return L.cob[k2] ? 'stone' : 'soil'; }
+        if (L.occAt(x, z) === 1) return 'masonry';
+        const fc = L.fieldAt(x, z); if (fc === 4) return 'soil'; if (fc === 1 || fc === 2) return CROP; if (fc) return GREEN;
+        return vilWallD(x, z) < 1 ? 'soil' : GREEN; },
+      onImpact(el, p, radius, intensity = 1){
+        const strong = el === 'force' || el === 'storm';
+        if (strong){ const Rr = radius*(el === 'force' ? 2.6 : 2.2), list = near(p.x, p.z, Rr);
+          for (const q of list){ if (q.dead) continue; const d = Math.hypot(q.x - p.x, q.z - p.z), f = (1 - d/Rr)**1.4*intensity, dmg = (el === 'force' ? 140 : 90)*f;
+            q.hp -= dmg; if (q.hp <= 0) breakItem(q, p.x, p.z, 4 + 9*f, false); else { q.y -= 0; setItem(q); }
+            if (el === 'storm' && KINDS[q.t].fl > 0.5 && R() < 0.6*f) q.burn = Math.max(q.burn, 0.4); }
+          for (const pp of people) if (pp.mode !== 'in' && Math.hypot(pp.x - p.x, pp.z - p.z) < 40){ pp.react = 0.2; pp.startle = 4; }
+          for (const H of herds) for (const m of H.members) if (Math.hypot(m.x - p.x, m.z - p.z) < 60){ const a = Math.atan2(m.z - p.z, m.x - p.x); m.tx = m.x + Math.cos(a)*15; m.tz = m.z + Math.sin(a)*15; m.flee = 4; } }
+        if (el === 'fire') for (const q of near(p.x, p.z, radius + 2.5)) if (!q.dead && KINDS[q.t].fl > 0) q.burn = Math.max(q.burn, 0.5);
+        if (el === 'water' || el === 'frost') for (const q of near(p.x, p.z, radius + 2)){ if (q.burn > 0){ q.burn = 0; stats.doused = (stats.doused || 0) + 1; } }
+        if (el === 'frost' && Math.abs(p.x - VIL_MILL.x) < 80 && Math.abs(p.z - vilStreamZ(p.x)) < 40) iceK = Math.min(1, iceK + 0.45*intensity);
+        if (el === 'nature') for (const q of near(p.x, p.z, radius*2.5 + 3)) if (q.t === 'hedge'){ if (q.dead){ q.dead = false; q.grow = 0.02; q.hp = q.max; q.char = 0; } else { q.hp = q.max; q.char = Math.max(0, q.char - 0.5); q.regrow = true; } setItem(q); }
+      },
+      status(env){
+        const out = [], cnt = {}; for (const p of people){ const a = p.mode === 'walk' ? 'walking' : p.act; cnt[a] = (cnt[a] || 0) + 1; }
+        const lab = { fields:'in the fields', workshops:'at work', pens:'with the herds', market:'at market', home:'at home', tavern:'in the tavern', church:'at church', walking:'on the road', shelter:'sheltering', fire:'fighting the fire', fled:'fled' };
+        const ph = { dawn:'Morning', noon:'Midday', dusk:'Evening', night:'Night' }[phase] || '';
+        out.push(ph + ': ' + Object.entries(cnt).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([a, n]) => `${n} ${lab[a] || a}`).join(', '));
+        if (inside) out.push(`Inside ${inside.b.name}${inside.where === 'upstairs' ? ' (upstairs)' : inside.where === 'stairs' ? ' (stairs)' : ''}`);
+        else if (Math.abs(S.pos.y - vilWalkY(S.pos.x, S.pos.z) - 1.8) < 0.6){ const h = bAt(S.pos.x, S.pos.z); if (h && levelOf(h, S.pos.y).where === 'roof') out.push(`On the roof of ${h.b.name}`); }
+        const burning = items.filter(q => q.burn > 0.05 && !q.dead).length;
+        if (fire || burning) out.push(`Fire${SURF.stats.burning ? ` ${Math.round(SURF.stats.burning*SURF.cs*SURF.cs)} m²` : ''}${burning ? ` · ${burning} cover burning` : ''}${cnt.fire ? ` · ${cnt.fire} villagers with buckets` : ''}`);
+        if (stats.broken) out.push(`Cover: ${stats.broken} broken`);
+        const loose = VIL_PENS.filter(P => P.open).map(P => P.kind === 'cow' ? 'cattle' : P.kind === 'sheep' ? 'sheep' : 'pigs'); if (loose.length) out.push(`${loose.join(', ')} loose`);
+        if (iceK > 0.3) out.push('Mill pond frozen');
+        return out.join(' · ');
+      },
+      update(dt, env){
+        lastEnv = env; const t = env.time;
+        // phase of the day, rain, fire: villagers re-plan after a short, individual delay
+        const ph = phaseOf(env), rn = env.rain > 0.45;
+        if ((fightT -= dt) < 0){ fightT = 1; const f = fieldsFire(); if (f){ fire = f; fireHold = 25; } else if ((fireHold -= 1) <= 0) fire = null; }   // a fire stays news for a while
+        const fireNews = !!fire !== !!world._fire;
+        if (ph !== phase || rn !== rainy || fireNews){ jumped = ph !== phase && !firstPlan; const only = fireNews && ph === phase && rn === rainy; phase = ph; rainy = rn; world._fire = !!fire;
+          const fx = (fire || world._fireAt || { x:0, z:0 }); world._fireAt = fire || world._fireAt;
+          for (const p of people) if (!only || Math.hypot(p.x - fx.x, p.z - fx.z) < 340 || p.act === 'fire' || p.act === 'fled') p.react = firstPlan ? 0.001 : jumped ? 0.001 + R()*0.5 : 0.5 + R()*(fire ? 3 : 14); }
+        for (const p of people){
+          if (p.react > 0){ p.react -= dt; if (p.react <= 0) plan(p, env, firstPlan && (phase === 'night' || phase === 'noon' || R() < 0.45), (jumped || firstPlan) && R() < 0.85); }
+          if (p.startle > 0) p.startle -= dt;
+          if (p.mode === 'walk'){ const tg = p.path[p.pi], dx = tg[0] - p.x, dz = tg[1] - p.z, d = Math.hypot(dx, dz), sp = p.sp*(p.act === 'fire' || p.act === 'fled' || p.startle > 0 ? 2.8 : rainy ? 1.6 : 1);
+            if (d < 0.6){ p.pi++; if (p.pi >= p.path.length){ const g = p.plan; if (g.enter){ p.mode = 'in'; p.inB = g.enter; enterSeat(p); } else p.mode = 'at'; } }
+            else { p.x += dx/d*sp*dt; p.z += dz/d*sp*dt; const ah = Math.atan2(dx, dz); let da = ((ah - p.hd + Math.PI) % TAU + TAU) % TAU - Math.PI; p.hd += da*Math.min(1, dt*6); p.ph += dt*sp*4.2; } }
+        }
+        firstPlan = false;
+        // firefighters douse what is burning near them
+        if (fire && (burnT -= dt) < 0){ burnT = 1.6; const B = SURF.burning;
+          for (const p of people) if (p.act === 'fire' && p.mode === 'at'){ let best = null, bd = 9; for (let i=0;i<B.length;i+=Math.max(1, (B.length/120)|0)){ const q = B[i], d = Math.hypot(q.x - p.x, q.z - p.z); if (d < bd){ bd = d; best = q; } }
+            if (best){ SURF.layer?.impact({ element:'water', position:[best.x, heightAt(best.x, best.z), best.z], radius:3, intensity:0.9 }); strikeFX.pulse(V3(best.x, heightAt(best.x, best.z), best.z), 0x5ab0ff, 1.2); }
+            else if (B.length){ const q = B[(R()*B.length)|0]; if (Math.hypot(q.x - p.x, q.z - p.z) < 120){ const a = Math.atan2(p.z - q.z, p.x - q.x); p.plan = { x:q.x + Math.cos(a)*4, z:q.z + Math.sin(a)*4, act:'fire' }; p.path = [[p.plan.x, p.plan.z]]; p.pi = 0; p.mode = 'walk'; } } } }
+        // draw villagers
+        for (const p of people){ let x = p.x, z = p.z, y, hd = p.hd, vis = p.mode !== 'in', am = 0, bend = 0, sit = 0;
+          if (p.mode === 'in' && p.seat){ vis = true; x = p.seat.x; z = p.seat.z; hd = Math.atan2(-p.seat.f*L.tavern.s, -p.seat.f*L.tavern.c); sit = 1; y = L.tavern.fy0; }
+          else y = vilWalkY(x, z);
+          if (p.mode === 'walk') am = 0.55*Math.min(1, p.sp/1.2)*(p.act === 'fire' || p.act === 'fled' || p.startle > 0 ? 1.4 : 1);
+          if (p.mode === 'at'){ if (p.plan?.field) bend = 0.6*(0.5 + 0.5*Math.sin(t*0.6 + p.i)); if (p.act === 'fire') { bend = 0.3*(0.5 + 0.5*Math.sin(t*3 + p.i)); am = 0.15; p.ph += dt*3; }
+            if (p.act === 'market' || p.act === 'workshops') hd += 0.4*Math.sin(t*0.3 + p.i); }
+          dm.position.set(x, y, z); dm.rotation.set(0, hd, 0); dm.scale.setScalar(vis ? 0.94 + (p.i % 5)*0.03 : 0.0001); dm.updateMatrix(); perM.setMatrixAt(p.i, dm.matrix);
+          aWalk.setXYZW(p.i, p.ph, am, bend, sit); }
+        perM.instanceMatrix.needsUpdate = true; aWalk.needsUpdate = true;
+        // lit windows: night, and somebody home
+        const dark = 1 - smoothstep(0.15, 0.6, env.day), occ = new Float32Array(64);
+        for (const p of people) if (p.mode === 'in' && p.inB) occ[p.inB.id] += 1;
+        for (const b of L.blds){ const lit = b.church ? (phase === 'dusk' || phase === 'night' ? 0.6 : 0) : b.enter === 'smithy' ? 0 : Math.min(1, occ[b.id]); LIT.value[b.id] += ((lit > 0 ? (0.75 + 0.25*Math.sin(t*3 + b.id))*Math.max(dark, rainy ? 0.35 : 0) : 0) - LIT.value[b.id])*Math.min(1, dt*2); }
+        LIT.value[62] = 0.5*dark;
+        lantern.opacity = dark*0.9;
+        matOf.ember.emissiveIntensity = 2.2 + 0.8*Math.sin(t*7.3)*Math.sin(t*3.1);
+        // where is the viewer: inside a building dims daylight, lights its hearth and widens the pupils
+        const h = bAt(S.pos.x, S.pos.z); inside = null;
+        if (h && !h.b.shed){ const lv = levelOf(h, S.pos.y); if (lv.where !== 'roof' && S.pos.y < h.b.fy0 + (vilRoofAt(h.b, h.lx, h.lz)?.under ?? 3)) inside = { b:h.b, where:lv.where }; }
+        const kin = inside ? 1 : 0; lightT += (kin - lightT)*Math.min(1, dt*2.5);
+        world.lightK = 1 - 0.62*lightT; world.envK = 1 - 0.75*lightT; world.exposureK = 1 + 0.6*lightT*(1 - 0.5*dark);
+        const hb = inside?.b?.hearth ? inside.b : null; if (hb){ hearthL.position.set(...hb.hearth); hearthL.intensity = (hb.forge ? 30 : 22)*(0.85 + 0.15*Math.sin(t*9)*Math.sin(t*4.7)); hearthL.distance = hb.church ? 24 : 14; } else hearthL.intensity = 0;
+        forgeL.intensity = (12 + 30*dark)*(0.8 + 0.2*Math.sin(t*11)*Math.sin(t*5.3)); forgeSmoke.userData.tick(t); forgeSmoke.material.uniforms.uOpacity.value = 0.5;
+        smoke.userData.tick(t); smoke.material.uniforms.uOpacity.value = 0.22 + 0.25*(phase === 'dawn' || phase === 'dusk' ? 1 : phase === 'night' ? 0.6 : 0.3); smoke.material.uniforms.uDrift.value.set(env.wind[0]*0.7, 0, env.wind[1]*0.7);
+        // turning parts
+        wheel.rotation.x -= dt*0.9*(iceK > 0.6 ? 0 : 1);
+        const ws = Math.hypot(env.wind[0], env.wind[1]), wa = Math.atan2(env.wind[0], env.wind[1]); let dy = ((wa + Math.PI - body.rotation.y + Math.PI) % TAU + TAU) % TAU - Math.PI; body.rotation.y += dy*Math.min(1, dt*0.05);
+        sails.rotation.z -= dt*clamp(ws*0.12, 0.1, 2.2);
+        // pond ice thaws above freezing
+        iceK = clamp(iceK - dt*(env.temp > 1 ? 0.004 : -0.002), 0, 1); ice.material.opacity = smoothstep(0.05, 0.6, iceK)*0.92;
+        // cover: burning, regrowth, debris
+        let burning = 0;
+        if ((world._igT = (world._igT ?? 0) - dt) < 0){ world._igT = 0.5; const B = SURF.burning; for (let i=0;i<B.length;i+=Math.max(1, (B.length/100)|0)){ const c = B[i]; for (const q of near(c.x, c.z, 2.6)) if (!q.dead && KINDS[q.t].fl > 0 && R() < 0.5*KINDS[q.t].fl) q.burn = Math.max(q.burn, 0.3); } }
+        for (const q of items){
+          if (q.regrow || (q.t === 'hedge' && q.grow < 1 && !q.dead)){ q.grow = Math.min(1, q.grow + dt*0.06); if (q.grow >= 1) q.regrow = false; setItem(q); }
+          if (q.burn <= 0 || q.dead) continue; burning++;
+          q.burn = clamp(q.burn + dt*(0.12 - env.rain*0.1 - SURF.amb.wet*0.08), 0, 1); q.fuel -= dt*q.burn/(q.t === 'stack' ? 50 : q.t === 'wall' ? 1e9 : 26); q.char = Math.min(1, q.char + dt*q.burn*0.05);
+          if ((q.fT = (q.fT ?? 0) - dt) < 0){ q.fT = 0.9; SURF.layer?.impact({ element:'fire', position:[q.x, q.y, q.z], radius:q.t === 'stack' ? 2.4 : 1.4, intensity:0.6 + 0.6*q.burn }); setItem(q); }
+          if (q.burn < 0.03){ q.burn = 0; setItem(q); } else if (q.fuel <= 0) breakItem(q, q.x, q.z + 0.1, 0.6, true);
+        }
+        stats.burning = burning;
+        for (const k2 in DEB){ const D = DEB[k2]; let any = false;
+          for (const p of D.P){ if (!p || !p.live) continue; any = true; p.vy -= 9.8*dt; p.x += p.vx*dt; p.y += p.vy*dt; p.z += p.vz*dt; p.rx += p.w*dt; p.rz += p.w*0.7*dt;
+            const gy = vilWalkY(p.x, p.z) + 0.06*p.s; if (p.y < gy){ p.y = gy; p.vy *= -0.28; p.vx *= 0.55; p.vz *= 0.55; p.w *= 0.5; if (Math.abs(p.vy) < 0.6 && Math.hypot(p.vx, p.vz) < 0.4){ p.live = false; p.rx = Math.round(p.rx/Math.PI)*Math.PI; } }
+            dm.position.set(p.x, p.y, p.z); dm.rotation.set(p.rx, p.ry, p.rz); dm.scale.setScalar(p.s); dm.updateMatrix(); D.m.setMatrixAt(p.slot, dm.matrix); }
+          if (any) D.m.instanceMatrix.needsUpdate = true; }
+        // livestock: wander inside the pen, or out through a broken fence
+        for (const H of herds){ const P = H.P, B = H.B; H.members.forEach((m, i) => {
+            if ((m.t -= dt) < 0){ m.t = 4 + R()*10; const pad = 2; if (P.open && R() < 0.5){ m.tx = m.x + (R() - 0.5)*40; m.tz = m.z + (R() - 0.5)*40; } else { m.tx = lerp(P.x0 + pad, P.x1 - pad, R()); m.tz = lerp(P.z0 + pad, P.z1 - pad, R()); } m.g = R() < 0.6 ? 1 : 0; }
+            const dx = m.tx - m.x, dz = m.tz - m.z, d = Math.hypot(dx, dz), want = m.flee > 0 ? 3.5 : d > 1 ? B.walk : 0; if (m.flee > 0) m.flee -= dt;
+            m.v += (want - m.v)*Math.min(1, dt*2); if (m.v > 0.05 && d > 0.05){ m.x += dx/d*m.v*dt; m.z += dz/d*m.v*dt; const ah = Math.atan2(dx, dz); let da = ((ah - m.hd + Math.PI) % TAU + TAU) % TAU - Math.PI; m.hd += da*Math.min(1, dt*2); }
+            if (!P.open){ m.x = clamp(m.x, P.x0 + 0.8, P.x1 - 0.8); m.z = clamp(m.z, P.z0 + 0.8, P.z1 - 0.8); }
+            m.ph += dt*(m.v/B.stride)*TAU; const gz = m.v < 0.3 ? m.g : 0; m.gr = (m.gr ?? 0) + (gz - (m.gr ?? 0))*Math.min(1, dt*1.5);
+            dm.position.set(m.x, heightAt(m.x, m.z) - 0.02, m.z); dm.rotation.set(0, m.hd, 0); dm.scale.setScalar(m.s); dm.updateMatrix(); H.mesh.setMatrixAt(i, dm.matrix);
+            H.aLeg.setXYZW(i, m.ph, clamp(m.v/2, 0, 1)*0.8 + (m.v > 0.1 ? 0.2 : 0), m.gr, 0); });
+          H.mesh.instanceMatrix.needsUpdate = true; H.aLeg.needsUpdate = true; }
+        henD.forEach((hn, i) => { if ((hn.t -= dt) < 0){ hn.t = 0.5 + R()*2.5; hn.peck = R() < 0.5 ? 1 : 0; if (!hn.peck){ hn.tx = hn.cx + (R() - 0.5)*7; hn.tz = hn.cz + (R() - 0.5)*7; } }
+          if (!hn.peck && hn.tx !== undefined){ const dx = hn.tx - hn.x, dz = hn.tz - hn.z, d = Math.hypot(dx, dz); if (d > 0.1){ hn.x += dx/d*dt*0.8; hn.z += dz/d*dt*0.8; hn.hd = Math.atan2(dx, dz); } }
+          dm.position.set(hn.x, heightAt(hn.x, hn.z), hn.z); dm.rotation.set(hn.peck ? 0.5 + 0.4*Math.sin(t*14 + i) : 0, hn.hd, 0); dm.scale.setScalar(1); dm.updateMatrix(); hens.setMatrixAt(i, dm.matrix); });
+        hens.instanceMatrix.needsUpdate = true;
+        birdD.forEach((g, i) => { const th = g.a + g.w*t*(g.s < 0.4 ? 1 : 0.5), x = g.cx + Math.cos(th)*g.rad, z = g.cz + Math.sin(th)*g.rad;
+          dm.position.set(x, heightAt(g.cx, g.cz) + g.h + 2*Math.sin(t*0.7 + g.ph), z); dm.rotation.set(0, -th + (g.w > 0 ? 0 : Math.PI), (g.w > 0 ? -1 : 1)*0.4); dm.scale.setScalar(g.s); dm.updateMatrix(); birds.setMatrixAt(i, dm.matrix); });
+        birds.instanceMatrix.needsUpdate = true;
+      }
+    };
+    return world;
+  }
+});
+
 /* ============================== RUINS ============================== */
 /* A lost highland city at the jungle's edge. A stepped temple-pyramid with a summit shrine looks down a colonnaded
    plaza and a raised causeway lined with stelae and colossal heads; a collapsed temple, a buried city grid, a
