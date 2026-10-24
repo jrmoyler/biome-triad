@@ -6,8 +6,10 @@ Arctic archipelago, an erupting Volcanic valley and a divine Haven of floating i
 New biomes plug in as packages for open worlds, games and apps. Every world runs on to the horizon and keeps the
 viewer inside its playable area.
 
-**Run it:** open `index.html` in any modern browser, or serve the folder with any static host
-(GitHub Pages, Vercel, Netlify). There is no build step; three.js loads from jsDelivr through an import map.
+**Run it:** serve the folder with any static host (GitHub Pages, Vercel, Netlify, or `npx serve` locally) and open
+`index.html`. There is no build step; three.js loads from jsDelivr through an import map. Opening the file directly
+from disk also works, but browsers refuse local module imports there, so the surface layer (fire, impacts, footprints in
+the state grid) stays inert and only the weather-driven wet and snow cover is shown.
 
 | Amazon (aerial, dawn) | Amazon (river, lily pads and lianas) |
 |---|---|
@@ -38,12 +40,16 @@ viewer inside its playable area.
 | Shift | Move fast |
 | Drag | Look |
 | Double-click | Mouse lock |
-| 1–6 | Switch biome |
+| 1–9, 0, − | Switch biome |
+| Touch + click, or F | Strike the ground (fire, frost, water, storm, grow, force) where you click, or at the screen centre |
 | H | Hide controls |
 | Touch joystick | Move on phones |
 
 The HUD also switches time of day (dawn, noon, dusk, night), weather (clear, rain with lightning, fog)
-and quality (Fast, Balanced, Ultra). Phones start on Fast. Deep links: `index.html#amazon`, `#sea`, `#egypt`, `#arctic`, `#volcano`, `#haven`.
+and quality (Fast, Balanced, Ultra). Phones start on Fast. Some worlds add their own controls (the Forest's seasons).
+The line under the title reports what the world is doing (temperature, fire, canopy, wind, ice, climbing…).
+Deep links: `index.html#amazon`, `#sea`, `#egypt`, `#arctic`, `#volcano`, `#haven`, `#forest`, `#taiga`, `#savanna`,
+`#canyon`, `#alpine`.
 
 ## Engine overview
 
@@ -58,8 +64,19 @@ All code lives in `index.html`, grouped into these sections:
   `clouds: { cover, base, top, cirrus, dark }`; rain thickens and darkens the deck, fog hides it, and the planar water
   reflection gets the same sky at half the march steps. The slab is marched from whichever side the viewer is on,
   so a biome can put it below the camera (the Haven's sea of clouds).
-- **Precipitation:** rain streaks with lightning, plus world-anchored snow, ash or glowing motes chosen per biome
-  with `precip`.
+- **Precipitation:** rain streaks with lightning, plus world-anchored snow, ash, dust or glowing motes chosen per biome
+  with `precip` (a world can swap it at runtime, e.g. rain below the freezing level and snow above). `fog.storm` and
+  `fog.stormTint` turn the Rain weather into a blizzard or a dust storm.
+- **Dynamic surface & environmental state** (`extensions/surface-state`): every world runs a deterministic, sparse
+  state grid (3 m cells, 10 Hz) holding wetness, snow, ice, temperature, burn, scorch, integrity, growth, charge and
+  more. The engine feeds it the HUD weather, the world's `climate` (air temperature with a lapse rate by altitude) and a
+  veering prevailing wind; untouched ground follows an ambient field, so cells only exist where something happened.
+  Fire spreads cell to cell through dry fuel, faster downwind, and dies out as the fuel runs out or rain falls. The
+  cells around the viewer are mirrored into a 128×128 texture window that the terrain, ground cover, trees and
+  impostors read: ground goes rain-dark and glossy, snow settles where the air is freezing, frost glazes it, fire
+  leaves char and glowing embers, plants flatten when trampled and burn away, canopies are stripped and trunks charred.
+  Live fire is drawn as flames, drifting smoke and flickering firelight. The Touch tools strike the layer with fire,
+  frost, water, storm (with a lightning bolt), growth or force; worlds react through `onImpact`.
 - **World edges:** `makeTerrain({ apron })` adds a coarse ring sampled from the same height and colour functions
   (optionally lifted, e.g. into a distant canopy) out to the horizon; `bounds`, `floor` and `ceiling` keep the
   viewer inside the playable area.
@@ -116,9 +133,17 @@ All code lives in `index.html`, grouped into these sections:
 
 ## Adding a biome
 
+Beyond the fields shown below, a world can declare `climate: { temp, lapse, night }`, `surface: { cellSize, humidity,
+spread, amb }`, `options` (extra HUD buttons, delivered to `setOption`) and `windy`, and its build can return
+`materialAt(x, z)` (surface material per cell: soil, sand, stone, vegetation, organic, wood, snow, ice, water…),
+`status(env)` (the line under the title), `onImpact(element, point, radius)`, `onSurfaceEvent(event)`,
+`locomote(S, forward, right, dt, keys)` (take over movement, e.g. climbing), and live `precip`, `fogK`, `fogTint`,
+`windK` and `tempOffset` properties.
+
+
 ```js
 Helios.registerBiome({
-  id: 'taiga', label: 'Taiga',
+  id: 'tundra', label: 'Tundra',
   sky: { turbidity: 4, rayleigh: 1.5, mie: 0.005, mieG: 0.8 },
   fog: { density: 0.0012, tint: [0.9, 0.95, 1.0] },
   ground: [0.2, 0.22, 0.18],                       // hemisphere bounce colour
@@ -175,13 +200,18 @@ node shot.mjs ../../index.html out/check \
 ```
 
 Each job saves a JPEG and prints the triangle count and draw calls. A job accepts `biome`, `q`, `tod`,
-`wx` (`clear`, `rain`, `fog`), `cam` (`[x, y, z, yaw, pitch]`) and `steps`. The engine exposes
-`window.__helios` (`load`, `setQuality`, `snap`, `stats`) only for this harness.
+`wx` (`clear`, `rain`, `fog`), `cam` (`[x, y, z, yaw, pitch]`), `opt` (`["season", "winter"]`), `strike`
+(`[["fire", x, z, radius, intensity], ...]`), `sim` (seconds of weather, surface and wildlife to advance before the
+frame) and `steps`. The engine exposes `window.__helios` (`load`, `setQuality`, `snap`, `stats`, `sim`, `strike`,
+`option`, `status`) only for this harness. `PORT` sets the harness server port.
+
+The surface package has its own tests: `cd extensions/surface-state && npm test` (Node 18+).
 
 ## Repository layout
 
 ```
-index.html                     The engine and the six biomes (single file, no build)
+index.html                     The engine and the eleven biomes (single file, no build)
+extensions/surface-state/      Dynamic Surface & Environmental State layer (ES modules, zero dependencies, tests)
 docs/renders/                  Reference frames from the render harness
 tools/render-harness/          Headless screenshot tool (puppeteer + SwiftShader)
 legacy/                        The original GLSL ES 3.00 raymarched version this project grew from
