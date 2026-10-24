@@ -248,17 +248,22 @@ void surfAt(vec3 wp, out vec4 A, out vec4 B){
 }
 `;
 function terrainMaterial(d = {}){
-  const o = { rock:[0.42,0.38,0.34], rockLo:0.3, bump:14, ripple:0, wet:0.5, foam:0, caustic:0, rows:0, grain:1, snow:0, glow:0, glowCol:[1.0,0.32,0.06], strata:1, ...d };
+  const o = { rock:[0.42,0.38,0.34], rockLo:0.3, bump:14, ripple:0, wet:0.5, foam:0, caustic:0, rows:0, grain:1, snow:0, glow:0, glowCol:[1.0,0.32,0.06], strata:1, band:[0, 0], ...d };
   const rc = new THREE.Color().setRGB(o.rock[0], o.rock[1], o.rock[2], THREE.SRGBColorSpace);
   const U = { uRock:{ value:new THREE.Vector4(rc.r, rc.g, rc.b, o.rockLo) }, uTD:{ value:new THREE.Vector4(o.bump, o.ripple, o.wet, o.rows) },
-    uTE:{ value:new THREE.Vector3(o.foam, o.caustic, o.grain) }, uTF:{ value:new THREE.Vector3(o.snow, o.glow, o.strata) }, uGlowC:{ value:new THREE.Color(...o.glowCol) },
+    uTE:{ value:new THREE.Vector3(o.foam, o.caustic, o.grain) }, uTF:{ value:new THREE.Vector3(o.snow, o.glow, o.strata) }, uTB:{ value:new THREE.Vector2(o.band[0] ? TAU/o.band[0] : 0, o.band[1]) }, uGlowC:{ value:new THREE.Color(...o.glowCol) },
     uT:WIND, uSunView:VU.uSunView, uSunCol:VU.uSunCol, ...SU };
   const m = new THREE.MeshStandardMaterial({ vertexColors:true, map:tex.ground, roughness:0.95, metalness:0 });
   m.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, U);
     sh.vertexShader = 'attribute float kind; varying vec3 vWP; varying vec3 vWN; varying float vKind;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
       vWP = (modelMatrix * vec4(transformed, 1.0)).xyz; vWN = normalize(mat3(modelMatrix) * objectNormal); vKind = kind;`);
-    sh.fragmentShader = 'uniform vec4 uRock, uTD; uniform vec3 uTE, uGlowC, uSunView, uSunCol; uniform vec2 uT; uniform vec3 uTF; varying vec3 vWP; varying vec3 vWN; varying float vKind;\n' + NOISE2D + SURF_GLSL + sh.fragmentShader
+    sh.fragmentShader = 'uniform vec4 uRock, uTD; uniform vec3 uTE, uGlowC, uSunView, uSunCol; uniform vec2 uT, uTB; uniform vec3 uTF; varying vec3 vWP; varying vec3 vWN; varying float vKind;\n' + NOISE2D + SURF_GLSL + sh.fragmentShader
+      .replace('#include <map_fragment>', `#ifdef USE_MAP
+        { // triplanar ground texture at 7 m, so cliffs and steep walls do not smear the planar projection
+          vec3 an = pow(abs(normalize(vWN)), vec3(4.0)); an /= an.x + an.y + an.z;
+          diffuseColor *= texture2D(map, vWP.zy/7.0)*an.x + texture2D(map, vWP.xz/7.0)*an.y + texture2D(map, vWP.xy/7.0)*an.z; }
+        #endif`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         vec2 twp = vWP.xz;
         float n3 = tfbm(twp*0.045), n1 = tvn(twp*1.1), n2 = tvn(twp*5.3 + 4.1), n4 = tvn(twp*23.0);
@@ -270,6 +275,7 @@ function terrainMaterial(d = {}){
         diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb*vec3(0.78, 0.9, 1.05)*(0.8 + 0.4*n2), ice*0.6);
         float strata = 1.0 + (0.3*sin(vWP.y*1.7 + n3*5.0) - 0.2)*uTF.z*(1.0 - smoothstep(60.0, 260.0, length(vViewPosition))) + 0.14*(n2 - 0.5);
         diffuseColor.rgb = mix(diffuseColor.rgb, uRock.rgb * strata * (0.78 + 0.44*n1), rk);
+        if (uTB.x > 0.0){ float bw = 0.5 + 0.5*sin(vWP.y*uTB.x + n3*4.0 + tvn(twp*0.004)*6.0); diffuseColor.rgb *= 1.0 - uTB.y*smoothstep(0.55, 0.8, bw)*smoothstep(0.15, 0.5, slope); }
         float rowc = 0.5 + 0.5*sin(twp.x*8.4 + n3*3.0 + twp.y*0.15);
         diffuseColor.rgb *= 1.0 - crop*(0.28 - 0.36*rowc)*uTD.w*(1.0 - smoothstep(18.0, 70.0, length(vViewPosition)));
         float wet = (1.0 - smoothstep(0.0, 1.5, vWP.y)) * step(-0.4, vWP.y) * uTD.z;
@@ -331,7 +337,7 @@ function terrainMaterial(d = {}){
           normal = normalize(mat3(viewMatrix) * nw);
         }`);
   };
-  m.customProgramCacheKey = () => 'terrain5';
+  m.customProgramCacheKey = () => 'terrain6';
   return m;
 }
 function makeTerrain({ size, seg, height, color, kind, cx=0, cz=0, repeat, detail, apron }){
@@ -1052,7 +1058,7 @@ function verdantFrame(cam){
   for (const m of lodTiles){ const bs = m.boundingSphere; m.visible = cam.position.distanceTo(bs.center) - bs.radius < lim; }
 }
 
-const kit = { THREE, forest, defineSpecies, sprayAtlas, scatter, plantMat, bladeClump, papyrusClump, fernPlant, broadleafPlant, boulderGeo, logGeo, gullGeo, critterMat, lilyGeo, lianaGeo,
+const kit = { THREE, forest, defineSpecies, sprayAtlas, scatter, plantMat, bladeClump, papyrusClump, fernPlant, broadleafPlant, boulderGeo, logGeo, gullGeo, fishGeo, critterMat, flock, lilyGeo, lianaGeo,
   puffField, islandGeo, terrainMaterial, tubeInto, geoBuf, geoFinish, lin, get Q(){ return Q; }, noise, rng, tex, makeTerrain, makeWater, instTiled, flora, smoothstep, lerp, clamp, srgb, mergeGeometries };
 
 /* ---------- Sky dressing: clouds, stars, moon, rain ---------- */
@@ -1293,6 +1299,49 @@ function critterMat(kind, roughness = 0.8){
   return m;
 }
 
+/* Flocking: boids (separation, alignment, cohesion) per flock, each flock drawn toward a home goal that wanders
+   about its volume, kept between a floor and a roof, shy of the viewer and scattered by strikes. Drives one
+   InstancedMesh; heading, climb and a bank into turns come from the velocity. Neighbours are searched within a
+   flock only, so the cost stays small. */
+const FLOCKS = [];
+function flock(mesh, { groups, speed=[6, 12], sep=4, view=16, coh=0.6, ali=1.2, floor, roof, clear=sep*3, scale=1, shy=0, bank=0.8, seed=1 }){
+  const r = rng(seed), A = [], dm = new THREE.Object3D(); dm.rotation.order = 'YXZ';
+  groups.forEach((G, gi) => { G.ph = r()*TAU; G.w = (0.04 + 0.05*r())*(r() < 0.5 ? -1 : 1); G.m = [];
+    for (let k=0;k<G.n;k++){ const a = r()*TAU, s = speed[0] + r()*(speed[1] - speed[0]); G.m.push(A.length);
+      A.push({ g:gi, x:G.x + (r() - 0.5)*G.r*0.5, y:G.y + (r() - 0.5)*(G.h ?? 10)*0.5, z:G.z + (r() - 0.5)*G.r*0.5, vx:Math.cos(a)*s, vy:0, vz:Math.sin(a)*s, yaw:0, bank:0, s:scale*(0.85 + 0.3*r()), ph:r()*10 }); } });
+  const scares = [];
+  const api = {
+    agents:A,
+    scare(p, rad = 40){ scares.push({ x:p.x, y:p.y, z:p.z, r:rad, t:2.5 }); },
+    update(dt, env){
+      if (dt <= 0) return; const t = env.time, h = Math.min(dt, 0.1);
+      for (const q of scares) q.t -= dt; while (scares.length && scares[0].t <= 0) scares.shift();
+      for (const G of groups){
+        const gx = G.x + Math.cos(t*G.w + G.ph)*G.r*0.55, gz = G.z + Math.sin(t*G.w*1.3 + G.ph)*G.r*0.55, gy = G.y + Math.sin(t*0.07 + G.ph)*(G.h ?? 10)*0.35;
+        for (const i of G.m){ const a = A[i];
+          let sx = 0, sy = 0, sz = 0, ax = 0, ay = 0, az = 0, cx = 0, cy = 0, cz = 0, nc = 0;
+          for (const j of G.m){ if (j === i) continue; const b = A[j], dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z, d2 = dx*dx + dy*dy + dz*dz;
+            if (d2 < view*view){ ax += b.vx; ay += b.vy; az += b.vz; cx += b.x; cy += b.y; cz += b.z; nc++;
+              if (d2 < sep*sep){ const k = 1/Math.max(d2, 0.01); sx += dx*k; sy += dy*k; sz += dz*k; } } }
+          let fx = sx*sep*2, fy = sy*sep*2, fz = sz*sep*2;
+          if (nc){ fx += (ax/nc - a.vx)*ali + (cx/nc - a.x)*coh; fy += (ay/nc - a.vy)*ali + (cy/nc - a.y)*coh; fz += (az/nc - a.vz)*ali + (cz/nc - a.z)*coh; }
+          const hx = gx - a.x, hy = gy - a.y, hz = gz - a.z, hd = Math.hypot(hx, hz), pull = 0.25 + 2.5*smoothstep(G.r*0.6, G.r*1.3, hd);
+          fx += hx/Math.max(hd, 1)*pull*speed[1]*0.4; fz += hz/Math.max(hd, 1)*pull*speed[1]*0.4; fy += hy*0.15;
+          const lo = floor ? floor(a.x, a.z, G) : -Infinity, hi = roof ? roof(a.x, a.z, G) : Infinity;
+          const mid = (lo + hi)/2, cl = Math.min(clear, (hi - lo)/2.5); if (a.y < lo + cl) fy += (lo + cl - a.y)*1.5; if (a.y > hi - cl) fy -= (a.y - hi + cl)*1.5; if (hi - lo < 2*cl) fy += (mid - a.y)*1.5;
+          const flee = (px, py, pz, rad, k) => { const dx = a.x - px, dy = a.y - py, dz = a.z - pz, d = Math.hypot(dx, dy, dz); if (d < rad && d > 1e-3){ const f = (1 - d/rad)*k/d; fx += dx*f; fy += dy*f*0.5 + f*rad*0.05; fz += dz*f; } };
+          if (shy) flee(S.pos.x, S.pos.y, S.pos.z, shy, speed[1]*6);
+          for (const q of scares) flee(q.x, q.y, q.z, q.r, speed[1]*10);
+          a.vx += fx*h; a.vy += fy*h; a.vz += fz*h;
+          const sp = Math.hypot(a.vx, a.vy, a.vz), lim = clamp(sp, speed[0], speed[1]*(scares.length ? 1.8 : 1))/Math.max(sp, 1e-4); a.vx *= lim; a.vy *= lim*0.6; a.vz *= lim;
+          a.x += a.vx*h; a.y += a.vy*h; a.z += a.vz*h; a.y = clamp(a.y, lo + 0.3, hi - 0.3);
+          const yaw = Math.atan2(a.vx, a.vz); let dy = yaw - a.yaw; dy -= Math.round(dy/TAU)*TAU; a.yaw += dy;
+          a.bank += (clamp(-dy/h*0.35*bank, -1.1, 1.1) - a.bank)*Math.min(1, h*3);
+          dm.position.set(a.x, a.y, a.z); dm.rotation.set(-Math.atan2(a.vy, Math.hypot(a.vx, a.vz)), a.yaw, a.bank); dm.scale.setScalar(a.s); dm.updateMatrix(); mesh.setMatrixAt(i, dm.matrix); } }
+      mesh.instanceMatrix.needsUpdate = true; }
+  };
+  mesh.frustumCulled = false; FLOCKS.push(api); return api;
+}
 /* Hanging liana curtain: several sagging strands with real leaf blades, origin at the top */
 function lianaGeo(seed){
   const r = rng(seed), b = gb(), wood = lin(0.3, 0.22, 0.12), lf = lin(0.16, 0.4, 0.1);
@@ -1504,6 +1553,44 @@ function colossusGeo(){
   put(new THREE.BoxGeometry(5.8, 0.5, 1.2), 0, 7.4, 0.75, gd);
   return mergeGeometries(parts.map(stripAttrs));
 }
+/* The Great Sphinx: a recumbent lion carved from the bedrock, facing the river. Each mass (haunches, body, chest,
+   paws, nemes headcloth, face) is eroded along the limestone beds, with the soft layers cut back and darker and the
+   harder head better kept. +x is forward. */
+function sphinxGeo(){
+  const parts = [], st = lin(0.88, 0.74, 0.52), dk = lin(0.6, 0.46, 0.3), pale = lin(0.93, 0.84, 0.66);
+  const part = (g, c, ero, k = 1, head = false) => {
+    if (head){ g.translate(-17, -16, 0).scale(0.8, 0.8, 0.8).translate(17.6, 16, 0); c = [(c[0] - 17)*0.8 + 17.6, (c[1] - 16)*0.8 + 16, c[2]*0.8]; }   // the head is small for the body
+    const p = g.attributes.position, col = new Float32Array(p.count*3);
+    for (let i=0;i<p.count;i++){ const x = p.getX(i), y = p.getY(i), z = p.getZ(i), dx = x - c[0], dy = y - c[1], dz = z - c[2], l = Math.hypot(dx, dy, dz) || 1;
+      const bed = 0.5 + 0.5*Math.sin(y*0.95 + 1.6*perlin(x*0.05, z*0.05)), soft = smoothstep(0.5, 0.86, bed), pit = 0.5 + 0.5*perlin(x*0.45 + z*0.2, y*0.5);
+      const d = -ero*(0.5*soft + 0.3*pit)*smoothstep(0.3, 2.5, y);
+      p.setXYZ(i, x + dx/l*d, y + dy/l*d*0.3, z + dz/l*d);
+      const tone = (0.88 + 0.16*perlin(x*1.7, y*1.9 + z))*lerp(0.72, 1, smoothstep(0, 7, y));
+      for (let j=0;j<3;j++) col[i*3+j] = lerp(lerp(st[j], dk[j], soft*0.75), pale[j], (1 - k)*0.6)*tone; }
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3)); parts.push(g); };
+  const sph = (sx, sy, sz, x, y, z, ero, k, head) => part(new THREE.SphereGeometry(1, 40, 22).scale(sx, sy, sz).translate(x, y, z), [x, y, z], ero, k, head);
+  part(new THREE.BoxGeometry(92, 14, 36, 30, 6, 12).translate(-2, -5.8, 0), [-2, -20, 0], 1.6);   // the bedrock floor of the hollow it was cut from
+  sph(30, 8.6, 9.6, -6, 9, 0, 1.0); sph(11.5, 9.5, 11, -26, 8.6, 0, 1.1); sph(9.5, 11.5, 10.5, 12, 11.2, 0, 1.0);
+  for (const sd of [-1, 1]){
+    part(new THREE.CylinderGeometry(2.5, 2.9, 26, 18, 6).rotateZ(Math.PI/2).translate(26, 2.7, sd*5.3), [26, 2.7, sd*5.3], 0.5);
+    sph(3.2, 2.5, 3.1, 39, 2.3, sd*5.3, 0.35);
+    sph(10.5, 4.2, 4.2, -19, 3.6, sd*9.4, 0.8);   // folded hind legs
+    part(new THREE.BoxGeometry(2.4, 9, 3.4, 2, 6, 2).translate(21.6, 17.6, sd*5.6), [21.6, 17.6, sd*5.6], 0.4, 0.4, true);   // nemes lappets on the chest
+  }
+  part(new THREE.CylinderGeometry(4.6, 6.6, 8, 24, 4).translate(17, 17.8, 0), [17, 17.8, 0], 0.6);
+  { const g = new THREE.BoxGeometry(7.5, 10.5, 15.5, 4, 6, 8), p = g.attributes.position;   // nemes headcloth flaring out behind the face
+    for (let i=0;i<p.count;i++){ const y = p.getY(i); p.setZ(i, p.getZ(i)*(y > 0 ? lerp(1, 0.52, y/5.25) : 1)); if (p.getX(i) < 0) p.setY(i, y - 1.2); }
+    g.translate(17.2, 23.5, 0); part(g, [17.2, 23.5, 0], 0.3, 0.5, true); }
+  sph(4.6, 5.6, 4.5, 20.6, 24.6, 0, 0.18, 0.2, true);
+  part(new THREE.BoxGeometry(1.8, 2.3, 1.9).translate(24.8, 23.8, 0), [24.8, 23.8, 0], 0.15, 0.3, true);   // the (broken) nose
+  part(new THREE.BoxGeometry(1.4, 1.1, 6.8).translate(24.3, 26.7, 0), [24.3, 26.7, 0], 0.1, 0.3, true);   // brow
+  part(new THREE.BoxGeometry(1.0, 0.7, 3.6).translate(25.0, 21.6, 0), [25.0, 21.6, 0], 0.1, 0.3, true);   // mouth
+  { const b = geoBuf(), pts = []; for (let i=0;i<=10;i++){ const t = i/10; pts.push(V3(-34 + t*16, 2 + 3.2*Math.sin(t*Math.PI*0.8), 11.5 + 1.5*Math.sin(t*2))); }   // tail curled along the right flank
+    tubeInto(b, pts, pts.map((_, i) => 1.3 - i*0.06), 10, { ao:() => 1 }); const g = geoFinish(b); g.deleteAttribute('uv'); part(g, [-26, 3, 11], 0.3); }
+  const g = mergeGeometries(parts.map(q => worldUV(stripAttrs(q), 4)));
+  g.computeVertexNormals(); g.computeBoundingSphere(); OWNED.push(g);
+  return g;
+}
 function criosphinxGeo(){
   const parts = [], st = lin(0.78, 0.64, 0.46), dk = lin(0.55, 0.43, 0.3);
   const put = (g, x, y, z, col) => { g.translate(x, y, z); colored(g, col); parts.push(g); };
@@ -1698,6 +1785,7 @@ function strike(el, p, radius = ELEMENTS_FX[el]?.[1] ?? 4, intensity = 1){
   SURF.layer?.impact({ element:el, position:[p.x, p.y, p.z], radius, intensity });
   if (el === 'storm'){ S.flash = Math.max(S.flash, 0.9); strikeFX.bolt(p); }
   strikeFX.pulse(p, ELEMENTS_FX[el]?.[0] ?? 0xffffff, radius);
+  for (const f of FLOCKS) f.scare(p, 30 + radius*6);
   active.onImpact?.(el, p, radius, intensity);
 }
 kit.impact = (el, x, z, radius, intensity) => strike(el, V3(x, active.heightAt(x, z), z), radius, intensity);
@@ -1965,22 +2053,19 @@ Helios.registerBiome({
     sc.forEach(o => group.add(o.group));
 
     // ---- Wildlife: gull flocks over the islands, fish schools over the reef
-    const gullM = new THREE.InstancedMesh(gullGeo(), critterMat('wing'), 40), gullD = [], dm = new THREE.Object3D();
-    for (let i=0;i<40;i++){ const I = isl[i%isl.length]; gullD.push({ cx:I.x+(R()-0.5)*I.r*0.6, cz:I.z+(R()-0.5)*I.r*0.6, rad:50+R()*I.r*0.8, w:(0.12+R()*0.1)*(R()<0.5?-1:1)/Math.max(0.5,I.r/150), a:R()*TAU, h:25+R()*60+I.h*0.5, ph:R()*10 }); }
-    gullM.frustumCulled = false; gullM.castShadow = false; group.add(gullM);
-    const fishM = new THREE.InstancedMesh(fishGeo(), critterMat('fish', 0.4), 150), fishD = [];
-    for (let i=0;i<150;i++){ const I = isl[(i/30|0)%isl.length], sch = (i/30|0); fishD.push({ cx:I.x+Math.cos(sch*2.1)*I.r*1.12, cz:I.z+Math.sin(sch*2.1)*I.r*1.12, a:R()*TAU, rad:4+R()*12, w:(0.3+R()*0.25)*(R()<0.8?1:-1), y:-1.8-R()*4, ph:R()*10 }); fishM.setColorAt(i, new THREE.Color(0.9+R()*0.7, 0.8+R()*0.6, 0.8+R()*0.4)); }
-    fishM.frustumCulled = false; group.add(fishM);
+    const gullM = new THREE.InstancedMesh(gullGeo(), critterMat('wing'), 40);
+    gullM.castShadow = false; group.add(gullM);
+    const gulls = k.flock(gullM, { groups:isl.slice(0, 5).map((I, j) => ({ x:I.x, y:40 + I.h*0.5, z:I.z, r:Math.max(80, I.r*0.9), h:50, n:8 })), speed:[7, 12], sep:5, view:22, floor:(x, z) => Math.max(0, heightAt(x, z)) + 6, scale:1.6, shy:18, seed:41 });
+    const fishM = new THREE.InstancedMesh(fishGeo(), critterMat('fish', 0.4), 150);
+    for (let i=0;i<150;i++) fishM.setColorAt(i, new THREE.Color(0.9+R()*0.7, 0.8+R()*0.6, 0.8+R()*0.4));
+    group.add(fishM);
+    const fish = k.flock(fishM, { groups:[0,1,2,3,4].map(sch => { const I = isl[sch%isl.length]; return { x:I.x + Math.cos(sch*2.1)*I.r*1.12, y:-3, z:I.z + Math.sin(sch*2.1)*I.r*1.12, r:14, h:4, n:30 }; }),
+      speed:[1.2, 2.6], sep:0.8, view:4, coh:0.9, ali:1.6, floor:(x, z) => heightAt(x, z) + 0.4, roof:() => -0.7, clear:0.8, scale:0.65, shy:5, bank:0.3, seed:42 });
 
     const boats = [0,1,2].map(i => { const b=flora.boat(0xffffff, 0xe8e2d8); b.scale.setScalar(1.3); b.position.set(-120+i*170, 0, -320-i*260); b.rotation.y=0.6+i; group.add(b); return b; });
     return { group, heightAt, materialAt:(x,z) => { const y = heightAt(x,z); return y < 0 ? 'water' : y < 3.2 ? 'sand' : y > 60 ? 'stone' : 'vegetation'; }, update(dt, env){
       boats.forEach((b,i) => { b.translateZ(dt*(2.5+i)); b.position.y = 0.25*Math.sin(env.time*1.3+i); b.rotation.z = 0.06*Math.sin(env.time*0.9+i*2); b.rotation.x = 0.04*Math.sin(env.time*1.1+i); });
-      gullD.forEach((g,i) => { const th = g.a + g.w*env.time, x = g.cx + Math.cos(th)*g.rad, z = g.cz + Math.sin(th)*g.rad, y = g.h + 4*Math.sin(env.time*0.4 + g.ph);
-        dm.position.set(x, y, z); dm.rotation.set(0, -th + (g.w>0 ? 0 : Math.PI), (g.w>0?-1:1)*0.35); dm.scale.setScalar(1.6); dm.updateMatrix(); gullM.setMatrixAt(i, dm.matrix); });
-      gullM.instanceMatrix.needsUpdate = true;
-      fishD.forEach((f,i) => { const th = f.a + f.w*env.time, x = f.cx + Math.cos(th)*f.rad, z = f.cz + Math.sin(th)*f.rad; dm.position.set(x, f.y + 0.4*Math.sin(env.time*0.8 + f.ph), z);
-        dm.rotation.set(0, -th + (f.w>0 ? 0 : Math.PI), 0); dm.scale.setScalar(0.6 + 0.2*Math.sin(f.ph)); dm.updateMatrix(); fishM.setMatrixAt(i, dm.matrix); });
-      fishM.instanceMatrix.needsUpdate = true;
+      gulls.update(dt, env); fish.update(dt, env);
     }};
   }
 });
@@ -1997,7 +2082,9 @@ Helios.registerBiome({
     const { noise:{fbm,ridged,perlin,hash2}, rng, smoothstep, lerp, srgb, flora, lin, scatter, plantMat, bladeClump, papyrusClump, boulderGeo } = k;
     const cx = z => -80 + 0.12*z + 35*Math.sin(z*0.0035);
     const nw = z => 60 + 8*Math.sin(z*0.01);
-    const heightAt = (x,z) => {
+    const SPH = { x:cx(-612) - 240, z:-612, y:1.6 };   // the Sphinx sits in the hollow quarried out of the foot of the plateau
+    const heightAt = (x,z) => { const h = heightAt0(x,z), m = 1 - smoothstep(0, 7, Math.max(Math.abs(x - SPH.x) - 50, Math.abs(z - SPH.z) - 22)); return m > 0 ? lerp(h, Math.min(h, SPH.y), m) : h; };
+    const heightAt0 = (x,z) => {
       const d=x-cx(z), ad=Math.abs(d), w=nw(z);
       const bed = -4.2*(1-Math.min(1,(ad/w)**2));
       let g = 1.4 + perlin(x*0.01,z*0.01)*0.4;
@@ -2009,6 +2096,7 @@ Helios.registerBiome({
     const isField = (x,y,z) => { const d=x-cx(z), ad=Math.abs(d), w=nw(z); return (d<0 ? (ad>w+12 && ad<205) : (ad>w+12 && d<470)) && y < 4 && y > 0.6; };
     const pyrZ = [ [-470,-700,140], [-560,-900,132], [-610,-1080,64], [-400,-640,22], [-395,-670,22], [-390,-700,22] ];
     const blocked = (x,z) => { for (const [dx,pz,b] of pyrZ){ const px=cx(pz)+dx; if (Math.abs(x-px) < b*0.62 && Math.abs(z-pz) < b*0.62) return true; }
+      if (Math.abs(x - SPH.x) < 60 && Math.abs(z - SPH.z) < 32) return true;
       const tx=cx(-300)-(nw(-300)+58); return Math.abs(x-tx) < 75 && Math.abs(z+300) < 68; };
     const group = new THREE.Group();
     group.add(makeTerrain({ size:3400, cz:-500, seg:480, height:heightAt, apron:{ size:11000, seg:150 }, detail:{ rock:[0.72,0.56,0.4], rockLo:0.42, bump:16, ripple:1.5, rows:0.35, wet:0.7 },
@@ -2052,6 +2140,9 @@ Helios.registerBiome({
       const x=cx(z)+dx, m=new THREE.Mesh(pyramidGeo(b,h,seed), limeMat); m.position.set(x, heightAt(x,z)-1.2, z); m.rotation.y=0.03; m.castShadow=m.receiveShadow=true; group.add(m);
       if (capped){ const cap=new THREE.Mesh(new THREE.ConeGeometry(b*0.012+0.5, h*0.045, 4).rotateY(Math.PI/4), gold); cap.position.set(x, heightAt(x,z)-1.2+h-h*0.012, z); group.add(cap); }
     }
+
+    // ---- The Great Sphinx below the pyramid plateau, looking east across the river
+    { const m = new THREE.Mesh(sphinxGeo(), limeMat); m.position.set(SPH.x, SPH.y - 1.2, SPH.z); m.castShadow = m.receiveShadow = true; group.add(m); }
 
     // ---- Temple of the west bank: quay, pylon with relief and colossi, sphinx avenue, painted hypostyle hall, sanctuary
     const zT=-300, temple=new THREE.Group(); temple.position.set(cx(zT)-(nw(zT)+58), 0, zT); group.add(temple);
@@ -2184,6 +2275,29 @@ function icebergGeo(seed, detail = 4, tabular = false){
   }
   g.setAttribute('color', new THREE.BufferAttribute(col, 3)); g.computeVertexNormals(); g.computeBoundingSphere(); OWNED.push(g);
   return g;
+}
+/* Serac: a tottering ice tower from a crevassed icefall. A subdivided box with a jagged, plane-cut crown, fluted blue
+   flanks streaked with old layering, a snow cap on the up-facing top and deep blue in its recesses. */
+function seracGeo(seed){
+  const r = rng(seed), g = new THREE.BoxGeometry(1, 1, 1, 2, 4, 2).translate(0, 0.5, 0), p = g.attributes.position, ph = r()*20, cuts = [];
+  for (let i=0;i<3;i++){ const a = r()*TAU, e = 0.5 + r()*0.6; cuts.push([Math.cos(a)*Math.cos(e), Math.sin(e), Math.sin(a)*Math.cos(e), 0.78 + r()*0.25]); }
+  for (let i=0;i<p.count;i++){
+    let x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const w = 1 + 0.18*fbm(x*2.1 + ph, z*2.1 + y*1.7, 3) - 0.12*y + 0.06*Math.sin(Math.atan2(z, x)*7 + y*3);
+    x *= w; z *= w; y *= 1 + 0.35*perlin(x*3 + ph, z*3) + (y > 0.95 ? 0.25*ridged(x*4 + ph, z*4, 2) : 0);
+    for (const c of cuts){ const dd = x*c[0] + y*c[1] + z*c[2] - c[3]; if (dd > 0){ x -= c[0]*dd; y -= c[1]*dd; z -= c[2]*dd; } }
+    p.setXYZ(i, x, y, z);
+  }
+  const ng = g.toNonIndexed(); ng.computeVertexNormals(); g.dispose();
+  const q = ng.attributes.position, nn = ng.attributes.normal, col = new Float32Array(q.count*3), snow = lin(0.93, 0.95, 0.99), ice = lin(0.55, 0.78, 0.9), deep = lin(0.12, 0.38, 0.6);
+  for (let i=0;i<q.count;i++){
+    const x = q.getX(i), y = q.getY(i), z = q.getZ(i), up = nn.getY(i);
+    const layer = 0.5 + 0.5*Math.sin(y*26 + 3*perlin(x*2 + ph, z*2)), rec = smoothstep(0.35, -0.2, y) + 0.4*smoothstep(0.2, 0.6, perlin(x*5 + ph, y*4 + z*5));
+    const cap = smoothstep(0.35, 0.75, up)*smoothstep(0.45, 0.8, y);
+    for (let j=0;j<3;j++) col[i*3+j] = lerp(lerp(ice[j], deep[j], clamp(rec, 0, 1)*0.85)*(0.86 + 0.14*layer), snow[j], cap);
+  }
+  ng.setAttribute('color', new THREE.BufferAttribute(col, 3)); ng.computeBoundingSphere(); OWNED.push(ng);
+  return ng;
 }
 /* Pack-ice floe: an irregular plate with a humped snow top, a rounded blue rim and a submerged keel */
 function floeGeo(seed){
@@ -2390,18 +2504,17 @@ Helios.registerBiome({
     const smoke = puffField({ count:Math.round(220*Math.max(0.5, Q.density)), seed:7, life:34, rise:12, spread:30, size:[10, 46], drift:[1.6, 0, 0.7], opacity:0.2, colA:[0.92,0.95,0.99], colB:[0.95,0.97,1.0], order:4,
       emit:(i, r) => { for (let t=0;t<30;t++){ const x = 190 + (r()-0.5)*1400, z = -400 + (r()-0.5)*1200; if (base(x,z) < -3 && nearIsland(x,z) > 1.05) return [x, 2, z]; } return [0, -50, 0]; } });
     group.add(smoke);
-    const birdM = new THREE.InstancedMesh(gullGeo(), critterMat('wing'), 36), birdD = [], dm = new THREE.Object3D();
-    for (let i=0;i<36;i++){ const I = isl[i%4]; birdD.push({ cx:I.x + (R()-0.5)*I.r*0.5, cz:I.z + (R()-0.5)*I.r*0.5, rad:60 + R()*I.r*0.7, w:(0.1 + R()*0.08)*(R()<0.5?-1:1)/Math.max(0.6, I.r/180), a:R()*TAU, h:20 + R()*50 + I.h*0.3, ph:R()*10 }); birdM.setColorAt(i, new THREE.Color(1.15, 1.15, 1.2)); }
-    birdM.frustumCulled = false; group.add(birdM);
+    const birdM = new THREE.InstancedMesh(gullGeo(), critterMat('wing'), 36);
+    for (let i=0;i<36;i++) birdM.setColorAt(i, new THREE.Color(1.15, 1.15, 1.2));
+    group.add(birdM);
+    const petrels = k.flock(birdM, { groups:isl.slice(0, 4).map(I => ({ x:I.x, y:35 + I.h*0.3, z:I.z, r:Math.max(90, I.r*0.8), h:40, n:9 })), speed:[8, 14], sep:5, view:24, floor:(x, z) => Math.max(0, heightAt(x, z)) + 8, scale:1.1, shy:20, seed:43 });
     const aurora = auroraMesh(); group.add(aurora);
 
     return { group, heightAt, materialAt:(x,z) => { const y = heightAt(x,z); return y < 0 ? 'water' : glacierAt(x,z).m > 0.4 ? 'ice' : y > 4 && slopeY(x,z) < 0.75 ? 'stone' : 'snow'; }, update(dt, env){
       smoke.userData.tick(env.time);
       aurora.position.copy(S.pos); aurora.material.uniforms.uInt.value = smoothstep(0.2, 0.9, env.night) * (1 - env.rain) * 0.75;
       lamp.material.opacity = 0.25 + 0.75*env.night*(0.9 + 0.1*Math.sin(env.time*7));
-      birdD.forEach((g,i) => { const th = g.a + g.w*env.time, x = g.cx + Math.cos(th)*g.rad, z = g.cz + Math.sin(th)*g.rad;
-        dm.position.set(x, g.h + 3*Math.sin(env.time*0.4 + g.ph), z); dm.rotation.set(0, -th + (g.w > 0 ? 0 : Math.PI), (g.w > 0 ? -1 : 1)*0.3); dm.scale.setScalar(1.1); dm.updateMatrix(); birdM.setMatrixAt(i, dm.matrix); });
-      birdM.instanceMatrix.needsUpdate = true;
+      petrels.update(dt, env);
     }};
   }
 });
@@ -2843,9 +2956,10 @@ Helios.registerBiome({
     abyss.renderOrder = -2; abyss.frustumCulled = false; group.add(abyss);   // transparent pass: after the opaque sky dome, before the clouds
 
     // ---- Doves circling the sanctuary
-    const doveM = new THREE.InstancedMesh(gullGeo(), critterMat('wing'), 48), doveD = [], dm = new THREE.Object3D();
-    for (let i=0;i<48;i++){ const I = isl[i%3 === 0 ? 0 : (i%isl.length)]; doveD.push({ cx:I.x + (R()-0.5)*30, cz:I.z + (R()-0.5)*30, rad:30 + R()*I.r*0.9, w:(0.18 + R()*0.12)*(R()<0.5?-1:1), a:R()*TAU, h:I.y + 20 + R()*60, ph:R()*10 }); doveM.setColorAt(i, new THREE.Color(1.25, 1.25, 1.22)); }
-    doveM.frustumCulled = false; group.add(doveM);
+    const doveM = new THREE.InstancedMesh(gullGeo(), critterMat('wing'), 48);
+    for (let i=0;i<48;i++) doveM.setColorAt(i, new THREE.Color(1.25, 1.25, 1.22));
+    group.add(doveM);
+    const doves = k.flock(doveM, { groups:[0, 0, 1, 2, 3, 0].map(j => { const I = isl[j % isl.length]; return { x:I.x, y:I.y + 45, z:I.z, r:I.r*1.1 + 30, h:50, n:8 }; }), speed:[5, 9], sep:2.5, view:14, floor:(x, z) => heightAt(x, z) + 6, scale:0.75, shy:12, seed:44 });
     const lamps = group.userData.lamps;
 
     return { group, heightAt, materialAt:(x,z) => { const I = onIsland(x,z); return !I ? 'stone' : I === M0 && Math.hypot(x - M0.x, z - M0.z) < M0.plaza + 4 ? 'marble' : 'vegetation'; }, update(dt, env){
@@ -2857,9 +2971,7 @@ Helios.registerBiome({
       rings.forEach((r, i) => { r.rotation.z += dt*(0.1 + i*0.05)*(i%2 ? -1 : 1); });
       lamps.forEach((l, i) => l.material.opacity = 0.35 + 0.65*env.night*(0.92 + 0.08*Math.sin(env.time*3 + i)));
       spray.userData.tick(env.time);
-      doveD.forEach((g,i) => { const th = g.a + g.w*env.time, x = g.cx + Math.cos(th)*g.rad, z = g.cz + Math.sin(th)*g.rad;
-        dm.position.set(x, g.h + 5*Math.sin(env.time*0.5 + g.ph), z); dm.rotation.set(0, -th + (g.w > 0 ? 0 : Math.PI), (g.w > 0 ? -1 : 1)*0.35); dm.scale.setScalar(0.75); dm.updateMatrix(); doveM.setMatrixAt(i, dm.matrix); });
-      doveM.instanceMatrix.needsUpdate = true;
+      doves.update(dt, env);
     }};
   }
 });
@@ -2929,16 +3041,30 @@ function forestBushGeo(seed, o){
 /* Fallen trunk: tapered, gently bent tube with broken ends, moss on the upper side, pale end grain.
    hollow: a second inward-facing tube and annular end rims, so it can be walked through. Lies along local x. */
 function forestLogGeo(seed, L, R, hollow, plate){
-  const r = rng(seed), b = geoBuf(), pts = [], rr = [], N = 16, ph = r()*9;
-  for (let i=0;i<=N;i++){ const t = i/N; pts.push(V3((t - 0.5)*L, R + 0.12*R*Math.sin(t*3 + ph), 0.3*R*perlin(t*2 + ph, 1.3))); rr.push(R*(1.08 - 0.22*t)*(1 + 0.05*perlin(t*9, ph))); }
-  tubeInto(b, pts, rr, 14, { ao:()=>1, uRep:3, vScale:2.2 });
+  const r = rng(seed), b = geoBuf(), pts = [], rr = [], N = plate ? 44 : 16, SG = plate ? 26 : 14, ph = r()*9;
+  for (let i=0;i<=N;i++){ const t = i/N; pts.push(V3((t - 0.5)*L, R + 0.12*R*Math.sin(t*3 + ph) - (plate ? 0.5*R*Math.sin(t*Math.PI)*0.6 : 0), 0.3*R*perlin(t*2 + ph, 1.3))); rr.push(R*(1.08 - 0.22*t)*(1 + 0.05*perlin(t*9, ph))); }
+  tubeInto(b, pts, rr, SG, { ao:()=>1, uRep:3, vScale:2.2 });
   const outerEnd = b.P.length/3;
-  if (hollow){ const s0 = b.P.length/3, i0 = b.I.length; tubeInto(b, pts, rr.map(q => q*0.86), 14, { ao:()=>0.45, uRep:3, vScale:2.2 });
+  if (plate){   // the giant: deep bark furrows along its length, broken limbs on the upper side, a splintered crown end
+    for (let i=0;i<outerEnd;i++){ const j = i % (SG + 1), k = Math.floor(i/(SG + 1)), a = j/SG*TAU, x = b.P[i*3];
+      const fur = Math.pow(Math.abs(Math.sin(a*11 + 2.2*perlin(x*0.35 + ph, a*1.3))), 0.45), lump = 0.5 + 0.5*perlin(x*0.5 + ph, a*2);
+      const d = R*(0.09*fur - 0.05 + 0.06*lump)*(k === 0 || k === N ? 0.3 : 1); for (let q=0;q<3;q++) b.P[i*3+q] += b.N[i*3+q]*d; }
+    for (let k2=0;k2<9;k2++){ const t = 0.12 + 0.8*k2/8 + (r() - 0.5)*0.05, i0 = Math.round(t*N), c = pts[i0], a = (r() - 0.5)*2.2 + (r() < 0.3 ? Math.PI : 0), dir = V3(0.25*(r() - 0.5), Math.cos(a), Math.sin(a)).normalize();
+      const rad = rr[i0]*(0.22 + 0.2*r()), len = R*(0.8 + 1.8*r()), o = c.clone().addScaledVector(dir, rr[i0]*0.75), q = [o, o.clone().addScaledVector(dir, len*0.6), o.clone().addScaledVector(dir, len).add(V3(0.3*(r() - 0.5), 0, 0))];
+      tubeInto(b, q, [rad, rad*0.92, rad*0.8], 8, { ao:() => 0.95, uRep:1, vScale:2 });
+      const tip = q[2], tb = b.P.length/3; b.P.push(tip.x + dir.x*rad*0.35, tip.y + dir.y*rad*0.35, tip.z + dir.z*rad*0.35); b.N.push(dir.x, dir.y, dir.z); b.UV.push(0.5, 0.5); b.C.push(1.6, 1.25, 0.85);
+      const rim = tb - 9; for (let j=0;j<8;j++) b.I.push(tb, rim + j, rim + j + 1); } }
+  if (hollow){ const s0 = b.P.length/3, i0 = b.I.length; tubeInto(b, pts, rr.map(q => q*0.86), SG, { ao:()=>0.45, uRep:3, vScale:2.2 });
     for (let i=s0*3;i<b.N.length;i++) b.N[i] = -b.N[i];
     for (let i=i0;i<b.I.length;i+=3){ const t = b.I[i+1]; b.I[i+1] = b.I[i+2]; b.I[i+2] = t; }
-    for (const e of [0, N]){ const o0 = e*15, i0b = s0 + e*15; for (let j=0;j<14;j++){ const a = o0 + j, c = i0b + j; if (e) b.I.push(a, c, a+1, a+1, c, c+1); else b.I.push(a, a+1, c, a+1, c+1, c); } } }
+    for (const e of [0, N]){ const o0 = e*(SG + 1), i0b = s0 + e*(SG + 1); for (let j=0;j<SG;j++){ const a = o0 + j, c = i0b + j; if (e) b.I.push(a, c, a+1, a+1, c, c+1); else b.I.push(a, a+1, c, a+1, c+1, c); } } }
   else for (const e of [0, N]){ const ctr = b.P.length/3, c = pts[e]; b.P.push(c.x, c.y, c.z); b.N.push(e ? 1 : -1, 0, 0); b.UV.push(0.5, 0.5); b.C.push(1.6, 1.25, 0.85);
-    for (let j=0;j<14;j++){ const a = e*15 + j; if (e) b.I.push(ctr, a, a+1); else b.I.push(ctr, a+1, a); } }
+    for (let j=0;j<SG;j++){ const a = e*(SG + 1) + j; if (e) b.I.push(ctr, a, a+1); else b.I.push(ctr, a+1, a); }
+    if (plate && e){   // where the crown snapped off: long splinters standing out of the broken end
+      for (let j=0;j<SG;j++){ if (r() < 0.25) continue; const a = e*(SG + 1) + j, P0 = V3(b.P[a*3], b.P[a*3+1], b.P[a*3+2]), P1 = V3(b.P[(a+1)*3], b.P[(a+1)*3+1], b.P[(a+1)*3+2]);
+        const tip = P0.clone().add(P1).multiplyScalar(0.5).lerp(c, 0.25 + 0.3*r()).add(V3(0.4 + 2.6*r()*r(), 0, 0)), tb = b.P.length/3;
+        for (const v of [P0, P1, tip]){ b.P.push(v.x, v.y, v.z); b.N.push(0.3, v.y - c.y, v.z - c.z); b.UV.push(0.5, 0.5); b.C.push(1.6, 1.25, 0.85); }
+        b.I.push(tb, tb + 1, tb + 2, tb, tb + 2, tb + 1); } } }
   if (plate){   // upturned root plate: a disc of soil bristling with torn roots, standing at the -x end
     const c0 = pts[0].clone().add(V3(-0.4, 0, 0)), RP = R*2.8, ring = 18, rings = 6;
     for (const side of [-1, 1]){ const S0 = b.P.length/3;   // soil face toward the crater and its back, each with its own normal
@@ -2951,7 +3077,7 @@ function forestLogGeo(seed, L, R, hollow, plate){
   const g = owned(geoFinish(b)), p = g.attributes.position, n = g.attributes.normal, col = g.attributes.color, bark = lin(0.5,0.42,0.33), moss = lin(0.2,0.27,0.09), pale = lin(0.62,0.5,0.34), soil = lin(0.36,0.27,0.18);
   for (let i=0;i<p.count;i++){
     const ao = col.getX(i); if (ao > 1.9){ const k = 0.7 + 0.5*perlin(p.getY(i)*1.3, p.getZ(i)*1.3); col.setXYZ(i, soil[0]*k, soil[1]*k, soil[2]*k); continue; } if (ao > 1.2){ col.setXYZ(i, pale[0], pale[1], pale[2]); continue; }
-    const mm = i < outerEnd ? smoothstep(0.3, 0.75, n.getY(i) + 0.5*perlin(p.getX(i)*0.6 + seed, p.getZ(i)*0.6 + p.getY(i)*0.4))*0.85 : 0, k = 0.8 + 0.35*perlin(p.getX(i)*3, p.getY(i)*3 + seed);
+    const mm = i < (hollow ? outerEnd : p.count) ? smoothstep(plate ? 0.5 : 0.3, 0.75, n.getY(i) + 0.5*perlin(p.getX(i)*0.6 + seed, p.getZ(i)*0.6 + p.getY(i)*0.4))*(plate ? 0.7 : 0.85) : 0, k = 0.8 + 0.35*perlin(p.getX(i)*3, p.getY(i)*3 + seed);
     for (let j=0;j<3;j++) col.setComponent(i, j, lerp(bark[j]*k, moss[j]*(0.8 + 0.4*k), mm)*ao);
   }
   return g;
@@ -3240,9 +3366,10 @@ Helios.registerBiome({
     leavesFall.frustumCulled = false; group.add(leavesFall);
 
     // ---- Rooks wheeling over the canopy
-    const birdM = new THREE.InstancedMesh(gullGeo(), critterMat('wing'), 26), birdD = [], dm = new THREE.Object3D();
-    for (let i=0;i<26;i++){ birdD.push({ cx:(R() - 0.5)*600, cz:CZ + 200 + (R() - 0.5)*600, rad:40 + R()*120, w:(0.12 + R()*0.1)*(R() < 0.5 ? -1 : 1), a:R()*TAU, h:62 + R()*40, ph:R()*10 }); birdM.setColorAt(i, new THREE.Color(0.06, 0.06, 0.07)); }
-    birdM.frustumCulled = false; group.add(birdM);
+    const birdM = new THREE.InstancedMesh(gullGeo(), critterMat('wing'), 26), dm = new THREE.Object3D();
+    for (let i=0;i<26;i++) birdM.setColorAt(i, new THREE.Color(0.06, 0.06, 0.07));
+    group.add(birdM);
+    const rooks = k.flock(birdM, { groups:[{ x:-60, y:78, z:CZ + 140, r:220, h:30, n:16 }, { x:180, y:84, z:CZ + 380, r:160, h:30, n:10 }], speed:[7, 11], sep:3, view:16, floor:(x, z) => heightAt(x, z) + 45, scale:0.9, shy:14, seed:45 });
 
     // ---- Seasons: targets for the foliage shader, litter, ground cover, temperature; eased in update()
     const C = (r, g, b) => new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace);
@@ -3299,9 +3426,7 @@ Helios.registerBiome({
         for (let i=falling.length-1;i>=0;i--){ const s = falling[i]; if ((s.delay -= dt) > 0) continue;
           s.w += 3.2*Math.sin(s.th + 0.15)*dt; s.th += s.w*dt; if (s.th > 1.42){ s.th = 1.42; s.w *= -0.25; if (Math.abs(s.w) < 0.05){ s.w = 0; falling.splice(i, 1); } }
           poseSap(s); }
-        birdD.forEach((b2, i) => { const th = b2.a + b2.w*env.time; dm.position.set(b2.cx + Math.cos(th)*b2.rad, b2.h + 3*Math.sin(env.time*0.5 + b2.ph), b2.cz + Math.sin(th)*b2.rad);
-          dm.rotation.set(0, -th + (b2.w > 0 ? 0 : Math.PI), (b2.w > 0 ? -1 : 1)*0.3); dm.scale.setScalar(0.9); dm.updateMatrix(); birdM.setMatrixAt(i, dm.matrix); });
-        birdM.instanceMatrix.needsUpdate = true;
+        rooks.update(dt, env);
       } };
     return world;
   }
@@ -4927,21 +5052,23 @@ Helios.registerBiome({
     const group = new THREE.Group();
 
     group.add(makeTerrain({ size:4800, cz:-1000, seg:560, height:ground, apron:{ size:15000, seg:130 },
-      detail:{ rock:[0.3,0.29,0.28], rockLo:0.55, bump:16, ripple:0, wet:0.35, snow:1, strata:1.3 },
+      detail:{ rock:[0.3,0.29,0.28], rockLo:0.55, bump:16, ripple:0, wet:0.35, snow:1, strata:1.3, band:[105, 0.5] },
       kind:(x,y,z)=> glacier(x,z).m > 0.72 ? 3 : 0,
       color:(c,x,y,z,ny)=>{
         const n = 0.5 + 0.5*perlin(x*0.03, z*0.03), m = 0.5 + 0.5*perlin(x*0.11, z*0.11), g = glacier(x,z);
         if (g.m > 0.3){   // lateral moraine grading into ice: ogive bands down the tongue, crevasse fields at the margins, firn higher up
           const q = g.q, og = 0.5 + 0.5*Math.sin((z + q*q*160)*0.045 + 2*perlin(x*0.01, z*0.01)), cv = Math.pow(0.5 + 0.5*Math.sin(z*0.11 + x*0.05*Math.sign(x - vx(z)) + 3*perlin(x*0.03, z*0.02)), 20)*smoothstep(0.35, 0.75, q);
           const sn = smoothstep(-1820, -1640, z), dirt = smoothstep(0.55, 0.85, og)*0.35;   // blue, dirt-banded ice toward the snout
-          const ice = [lerp(lerp(0.6, 0.74, og), 0.36, sn) - 0.3*cv - dirt*0.2, lerp(lerp(0.72, 0.84, og), 0.6, sn) - 0.25*cv - dirt*0.22, lerp(lerp(0.8, 0.9, og), 0.78, sn) - 0.15*cv - dirt*0.25], firn = smoothstep(380, 470, y + 30*perlin(x*0.01, z*0.01));
+          const tcv = Math.pow(0.5 + 0.5*Math.sin(z*0.3 + 5*perlin(x*0.015, z*0.006)), 10)*smoothstep(-1660, -1760, z)*(1 - smoothstep(0.5, 0.8, q));   // transverse crevasses in the icefall
+          const cvk = Math.max(cv, tcv*0.9), ice = [lerp(lerp(0.6, 0.74, og), 0.36, sn) - 0.42*cvk - dirt*0.2, lerp(lerp(0.72, 0.84, og), 0.6, sn) - 0.34*cvk - dirt*0.22, lerp(lerp(0.8, 0.9, og), 0.78, sn) - 0.2*cvk - dirt*0.25], firn = smoothstep(380, 470, y + 30*perlin(x*0.01, z*0.01));
           const mor = 1 - smoothstep(0.45, 0.82, g.m) + Math.exp(-((q/0.035)**2))*0.45*smoothstep(-0.2, 0.2, perlin(z*0.01, 2.2)), r0 = [0.38 + 0.06*m, 0.37 + 0.06*m, 0.34 + 0.05*m];
-          const cc = [0,1,2].map(j => lerp(lerp(ice[j], [0.93,0.95,0.98][j], firn), r0[j], clamp(mor, 0, 1)));
+          const fallK = smoothstep(-1680, -1780, z)*smoothstep(0.012, 0.05, 1 - ny)*(1 - smoothstep(0.5, 0.8, q));   // shadowed crevasse floors between the seracs
+          const cc = [0,1,2].map(j => lerp(lerp(lerp(ice[j], [0.93,0.95,0.98][j], firn), [0.2,0.4,0.58][j], fallK*0.6), r0[j], clamp(mor, 0, 1)));
           return srgb(c, cc[0], cc[1], cc[2]); }
         if (inChannel(x,z,1.05) && y < waterY(z) + 0.2) return srgb(c, 0.33 + 0.06*m, 0.35 + 0.06*m, 0.34 + 0.05*m);
         // rock: warm limestone banded with dark schist, rust and lichen staining, broad tone shifts
         const rv = (0.8 + 0.35*(0.5 + 0.5*perlin(x*0.0025 + 1, z*0.0025)))*(1 - 0.25*smoothstep(0.25, 0.65, perlin(x*0.035, z*0.035 + y*0.004)));
-        const band = 0.5 + 0.5*Math.sin(y*0.055 + 3*perlin(x*0.002, z*0.002) + 1.5*perlin(x*0.01, z*0.01)), schist = smoothstep(0.55, 0.78, band);
+        const schist = 0.25*smoothstep(0.2, 0.6, perlin(x*0.004 + 11, z*0.004));   // dark schist bands come from the shader (band) at full resolution
         const rust = smoothstep(0.3, 0.6, perlin(x*0.02 + 3, z*0.02 + y*0.01))*(1 - schist), lich = smoothstep(0.35, 0.65, perlin(x*0.05, z*0.05 + y*0.02));
         let rock = [0,1,2].map(j => lerp(lerp(lerp([0.6,0.55,0.46][j], [0.23,0.23,0.25][j], schist), [0.52,0.33,0.19][j], rust*0.55), [0.4,0.44,0.3][j], lich*0.3)*rv*(0.88 + 0.24*m));
         if (ny < 0.5) rock = rock.map(v => v*0.72);   // cliff bands read darker than the slabs between them
@@ -4977,14 +5104,22 @@ Helios.registerBiome({
     const spray = puffField({ count:Math.max(1, sprays.length)*12, seed:31, life:6, rise:10, spread:6, size:[2, 12], drift:[0.6, 0, 0.3], opacity:0.3, colA:[0.95,0.97,1.0], colB:[0.98,0.99,1.0], order:5, emit:i => sprays.length ? sprays[i % sprays.length] : [0, -1e5, 0] });
     group.add(spray);
 
-    // ---- Glacier snout: seracs and calved blocks where the tongue ends above the stream
+    // ---- Glacier: calved blocks at the snout, and an icefall broken into rows of seracs between transverse crevasses
     { const iceM = iceMaterial(0.32), gs = [icebergGeo(91, 3), icebergGeo(92, 3, true)], L = [[], []];
-      for (let i=0;i<150;i++){ if (i >= 46){   // icefall seracs on the steep reach of the tongue
-          const z = -1700 - R()*900, x = vx(z) + (R() - 0.5)*380, g = glacier(x, z); if (g.m < 0.75 || slopeAt(x, z, 8) < 0.16) continue; const s = 5 + R()*7;
-          L[i%2].push({ p:new THREE.Vector3(x, ground(x, z) - s*0.35, z), s:new THREE.Vector3(s*(0.7 + R()*0.6), s*(0.8 + R()*0.7), s*(0.7 + R()*0.6)), ry:R()*TAU, c:new THREE.Color(0.62, 0.78, 0.92) }); continue; }
+      for (let i=0;i<46;i++){
         const z = -1585 - R()*60, x = vx(z) + (R() - 0.5)*260, g = glacier(x,z); if (g.m < 0.3) continue; const s = 4 + R()*R()*12;
         L[i%2].push({ p:new THREE.Vector3(x, ground(x,z) - s*0.25, z), s:new THREE.Vector3(s*(0.8 + R()*0.5), s*(0.9 + R()*0.6), s*(0.8 + R()*0.5)), ry:R()*TAU, c:new THREE.Color(0.7, 0.84, 0.95) }); }
-      gs.forEach((g,i) => group.add(instTiled(g, iceM, L[i], { tile:400 }))); }
+      gs.forEach((g,i) => group.add(instTiled(g, iceM, L[i], { tile:400 })));
+      const sg = [seracGeo(93), seracGeo(94), seracGeo(95)], SL = [[], [], []];
+      for (let z=-1640, row=0; z>-2750; row++){
+        const sl = slopeAt(vx(z), z, 10), fall = smoothstep(0.1, 0.32, sl), dir = Math.atan2(vx(z - 5) - vx(z + 5), 10);
+        const d0 = lerp(16, 11, fall), gap = d0*(1.25 + 0.25*R()); z -= gap;   // blocks in arcuate rows, a crevasse between rows
+        for (let x = vx(z) - 320 + R()*10; x < vx(z) + 320; x += lerp(15, 9, fall)*(0.8 + 0.4*R())){
+          const g = glacier(x, z); if (g.m < 0.7 || R() > 0.35 + 0.65*fall) continue;
+          const zz = z + 22*(1 - g.q*g.q)*fall + (R() - 0.5)*gap*0.2;
+          const h = lerp(4, 15, fall)*(0.5 + 0.8*R())*(1 - 0.4*g.q), w = lerp(17, 13, fall)*(0.75 + 0.5*R()), d = d0*(0.85 + 0.3*R()), k = 0.78 + 0.3*R();
+          SL[(R()*3)|0].push({ p:new THREE.Vector3(x, ground(x, zz) - h*0.25, zz), s:new THREE.Vector3(w, h, d), ry:dir + (R() - 0.5)*0.35, rx:-0.12 - 0.25*fall*R(), rz:(R() - 0.5)*0.2, c:new THREE.Color(0.74*k, 0.88*k, 1.0*k) }); } }
+      sg.forEach((g,i) => group.add(instTiled(g, iceM, SL[i], { tile:200 }))); }
 
     // ---- The crag, its bolted route, and the rope bridge
     const rockMatF = new THREE.MeshStandardMaterial({ vertexColors:true, map:tex.ground, roughness:0.88 });
@@ -5258,7 +5393,7 @@ function loadBiome(id){
   veil.classList.remove('gone');
   const run = () => {
     if (active){ scene.remove(active.group); disposeTree(active.group); active.dispose?.(); }
-    OWNED.splice(0).forEach(g => g.dispose()); SCATTERS.length = 0;
+    OWNED.splice(0).forEach(g => g.dispose()); SCATTERS.length = 0; FLOCKS.length = 0;
     waters.length = 0;
     VU.uSeason.value.set(0, 0, 0, 0);
     activeDef = def; active = def.build(kit); scene.add(active.group);
@@ -5279,7 +5414,10 @@ window.__helios = { load: id => loadBiome(id), S, TOD, WX, setQuality: k => { qK
   status(){ return [active.status?.(S.lastEnv), surfaceStatus()].filter(Boolean).join(' · '); },
   relight(){ envDirty = true; envTimer = 0; },
   snap(steps=3){ for (let i=0;i<steps;i++){ last -= 1000/30; frame(last + 1000/30, true); } return canvas.toDataURL('image/jpeg', 0.92); },
-  stats(){ return renderer.info.render; } };
+  stats(){ return renderer.info.render; },
+  flocks(){ return FLOCKS.map(f => { const A = f.agents, n = A.length, m = [0,0,0], v = A.reduce((s, a) => s + Math.hypot(a.vx, a.vy, a.vz), 0)/n; for (const a of A){ m[0] += a.x/n; m[1] += a.y/n; m[2] += a.z/n; }
+    const gy = {}; for (const a of A){ (gy[a.g] ??= []).push(a.y); }
+    return { n, groupY:Object.values(gy).map(v => Math.round(v.reduce((s, y) => s + y, 0)/v.length*10)/10), mean:m.map(Math.round), speed:+v.toFixed(1), spread:Math.round(Math.sqrt(A.reduce((s, a) => s + (a.x - m[0])**2 + (a.z - m[2])**2, 0)/n)), finite:A.every(a => isFinite(a.x + a.y + a.z)) }; }); } };
 
 /* ============================== ATMOSPHERE ============================== */
 const _sunDir = new THREE.Vector3(), _moonDir = new THREE.Vector3(), _c = new THREE.Color(), _c2 = new THREE.Color();
