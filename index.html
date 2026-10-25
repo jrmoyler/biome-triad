@@ -1523,7 +1523,8 @@ function columnGeo(){
   const parts = [base, sh, neck, bud, aba].map(stripAttrs); return mergeGeometries(parts);
 }
 function houseGeo(seed){
-  const r = rng(seed), parts = [], w = 6 + r()*5, d = 5 + r()*5, h = 3.4 + r()*2.2, brick = lin(0.9 + r()*0.08, 0.84 + r()*0.05, 0.76), dark = lin(0.07, 0.05, 0.04), wood = lin(0.38, 0.26, 0.15);
+  const r = rng(seed), parts = [], w = 6 + r()*5, d = 5 + r()*5, h = 3.4 + r()*2.2, dark = lin(0.07, 0.05, 0.04), wood = lin(0.38, 0.26, 0.15);
+  const white = seed % 3 === 0, brick = white ? lin(1.25, 1.22, 1.12) : lin(0.9 + r()*0.08, 0.84 + r()*0.05, 0.76);   // every third variant limewashed (the mud texture keeps it from glaring)
   const batter = (bw, bh, bd, k) => { const g = new THREE.BoxGeometry(bw, bh, bd); const p = g.attributes.position; for (let i=0;i<p.count;i++) if (p.getY(i) > 0){ p.setX(i, p.getX(i)*k); p.setZ(i, p.getZ(i)*k); } g.computeVertexNormals(); return g; };
   const put = (g, x, y, z, col, ry=0) => { g.rotateY(ry); g.translate(x, y, z); if (!g.attributes.color) colored(g, col); parts.push(g); return g; };
   put(aoBase(colored(batter(w, h, d, 0.95).translate(0, h/2, 0), brick), h*0.7, 0.5), 0, 0, 0, brick);
@@ -1536,23 +1537,48 @@ function houseGeo(seed){
   for (let i=0;i<3;i++){ const g = new THREE.CylinderGeometry(0.14, 0.14, 1.2, 6); g.rotateZ(Math.PI/2); put(g, w*0.5 + 0.35, h - 0.5 - i*0.7, -d*0.25 + i*d*0.25, wood); }   // projecting roof beams
   if (r() < 0.6){ for (const sx of [-1, 1]) put(new THREE.CylinderGeometry(0.1, 0.1, 2.3, 6), sx*w*0.3, h + 1.15, -d*0.15, wood); for (let i=0;i<7;i++) put(new THREE.BoxGeometry(w*0.7, 0.07, 0.35), 0, h + 2.3, -d*0.3 + i*0.4, lin(0.55, 0.5, 0.25)); }
   if (r() < 0.3) put(batter(w*0.5, 2.4, d*0.5, 0.92).translate(0, 1.2, 0), -w*0.15, h + 0.1, -d*0.1, brick);
+  // painted door frame, a bench against the front wall, and roof clutter: water jars, a pile of palm-frond fuel, sometimes a dovecote
+  const paint = [lin(0.16, 0.36, 0.62), lin(0.2, 0.5, 0.48), lin(0.66, 0.3, 0.16)][seed % 3];
+  put(new THREE.BoxGeometry(1.65, 0.18, 0.56), 0, 2.2, d*0.5 + 0.02, paint); for (const sx of [-0.74, 0.74]) put(new THREE.BoxGeometry(0.16, 2.1, 0.56), sx, 1.05, d*0.5 + 0.02, paint);
+  put(new THREE.BoxGeometry(w*0.35, 0.45, 0.55), w*0.25, 0.22, d*0.5 + 0.28, brick);
+  for (let i=0;i<2 + (r()*3|0);i++){ const g = new THREE.LatheGeometry([[0.01, 0], [0.24, 0.05], [0.33, 0.32], [0.2, 0.62], [0.13, 0.68], [0.16, 0.74]].map(q => new THREE.Vector2(q[0], q[1])), 8);
+    put(g, w*(0.2 - r()*0.3), h + 0.1, -d*(0.2 + r()*0.2), lin(0.62, 0.36, 0.22)); }
+  { const g = new THREE.BoxGeometry(1.6 + r(), 0.7, 1.2 + r()*0.6); g.rotateY(r()); put(g, -w*0.25, h + 0.45, d*0.15, lin(0.5, 0.42, 0.24)); }
+  if (r() < 0.35){ const dc = new THREE.LatheGeometry([[0.9, 0], [0.85, 1.2], [0.55, 2.4], [0.25, 3.0], [0.0, 3.2]].map(q => new THREE.Vector2(q[0], q[1])), 10); put(dc, w*0.3, h + 0.1, d*0.25, brick); }
   return worldUV(mergeGeometries(parts.map(stripAttrs)), 3.2);
 }
+/* Seated colossus (faces +z): throne with a back pillar, rounded limbs resting on the knees, broad collar, striped
+   nemes, false beard and the double crown */
 function colossusGeo(){
-  const parts = [], gr = lin(0.8, 0.62, 0.44), bl = lin(0.1, 0.18, 0.4), gd = lin(0.86, 0.66, 0.2);
-  const put = (g, x, y, z, col) => { g.translate(x, y, z); colored(g, col); parts.push(g); };
-  put(new THREE.BoxGeometry(6.2, 4.2, 8), 0, 2.1, 0, gr);
-  for (const sx of [-1, 1]){ put(new THREE.BoxGeometry(2.2, 2.2, 4.6), sx*1.6, 5.3, 1.4, gr); put(new THREE.BoxGeometry(1.9, 4.2, 1.9), sx*1.6, 3.2, 3.6, gr); put(new THREE.BoxGeometry(1.1, 1.1, 2.6), sx*2.6, 6.4, 0.9, gr); }
-  put(new THREE.BoxGeometry(4.6, 5.6, 2.8), 0, 8.4, -0.9, gr);
-  put(new THREE.BoxGeometry(5.8, 1.6, 3.1), 0, 10.8, -0.9, gr);
-  put(new THREE.BoxGeometry(2.6, 1.4, 2.6), 0, 11.5, -0.9, gr);
-  put(new THREE.BoxGeometry(2.4, 2.8, 2.5), 0, 13.1, -0.9, gr);
-  put(new THREE.BoxGeometry(3.6, 3.2, 3.2), 0, 13.3, -1.5, bl);
-  for (const sx of [-1, 1]) put(new THREE.BoxGeometry(0.9, 2.8, 2.0), sx*1.6, 12.2, -0.5, bl);
-  put(new THREE.BoxGeometry(0.7, 1.6, 0.8), 0, 11.6, 0.55, bl);
-  put(new THREE.CylinderGeometry(1.0, 1.35, 2.2, 8), 0, 15.9, -1.3, gd);
-  put(new THREE.ConeGeometry(1.0, 1.8, 8), 0, 17.9, -1.3, gd);
-  put(new THREE.BoxGeometry(5.8, 0.5, 1.2), 0, 7.4, 0.75, gd);
+  const parts = [], gr = lin(0.8, 0.62, 0.44), bl = lin(0.1, 0.18, 0.4), gd = lin(0.86, 0.66, 0.2), wc = lin(0.9, 0.86, 0.76);
+  const put = (g, x, y, z, col) => { g.translate(x, y, z); if (col) colored(g, col); parts.push(g); return g; };
+  const stripes = (g, a, b, f) => { const p = g.attributes.position, c = new Float32Array(p.count*3); for (let i=0;i<p.count;i++){ const q = ((p.getY(i)*f) % 1 + 1) % 1 < 0.5 ? a : b; c.set(q, i*3); } g.setAttribute('color', new THREE.BufferAttribute(c, 3)); return g; };
+  const cap = (r, l, rx = 0, rz = 0) => new THREE.CapsuleGeometry(r, l, 4, 12).rotateX(rx).rotateZ(rz);
+  put(new THREE.BoxGeometry(7.2, 0.8, 9.6), 0, 0.4, 0.3, gr);
+  put(new THREE.BoxGeometry(6.4, 4.0, 7.4), 0, 2.8, -0.7, gr);
+  put(new THREE.BoxGeometry(2.6, 9.6, 1.3), 0, 5.6, -3.9, gr);   // back pillar
+  for (const sx of [-1, 1]){
+    put(cap(1.0, 3.2, Math.PI/2), sx*1.25, 5.5, 1.0, gr);           // thighs
+    put(new THREE.CylinderGeometry(0.78, 0.6, 4.4, 12), sx*1.25, 3.0, 3.25, gr);   // shins
+    put(new THREE.BoxGeometry(1.3, 0.55, 2.1), sx*1.25, 1.07, 3.75, gr);
+    put(new THREE.SphereGeometry(0.95, 12, 10), sx*2.15, 10.0, -0.9, gr);   // shoulders
+    put(cap(0.58, 2.3, 0.15), sx*2.45, 8.4, -0.75, gr);              // upper arms
+    put(cap(0.5, 2.6, Math.PI/2), sx*2.1, 6.75, 1.0, gr);            // forearms on the knees
+    put(new THREE.BoxGeometry(0.95, 0.5, 1.05), sx*1.85, 6.65, 2.75, gr);
+    put(stripes(new THREE.BoxGeometry(0.75, 2.6, 1.5, 1, 10, 1), bl, gd, 1.6), sx*1.45, 11.15, -0.35);   // nemes lappets
+  }
+  put(new THREE.BoxGeometry(1.5, 1.5, 3.0), 0, 5.1, 1.3, gd);       // kilt apron
+  { const pr = [[1.55, 5.4], [1.6, 6.4], [1.9, 7.6], [2.2, 8.8], [2.45, 9.7], [2.1, 10.4], [0.9, 10.9]].map(q => new THREE.Vector2(q[0], q[1]));
+    put(new THREE.LatheGeometry(pr, 18).scale(1, 1, 0.6), 0, 0, -0.9, gr); }
+  put(new THREE.CylinderGeometry(2.35, 2.5, 0.55, 18).scale(1, 1, 0.64), 0, 10.15, -0.85, gd);   // broad collar
+  put(new THREE.CylinderGeometry(0.75, 0.9, 1.2, 12), 0, 11.1, -0.9, gr);
+  put(new THREE.SphereGeometry(1.2, 18, 14).scale(1, 1.2, 1.05), 0, 12.55, -0.8, gr);
+  { const g = new THREE.BoxGeometry(3.4, 3.0, 3.0, 1, 12, 1), p = g.attributes.position;   // nemes: flares at the temples, narrows over the crown
+    for (let i=0;i<p.count;i++){ const y = p.getY(i); p.setX(i, p.getX(i)*(y > 0 ? lerp(1, 0.72, y/1.5) : 1)); if (p.getZ(i) > 0) p.setZ(i, p.getZ(i)*0.35); }
+    put(stripes(g, bl, gd, 1.6), 0, 12.7, -1.35); }
+  put(new THREE.CylinderGeometry(0.2, 0.3, 1.3, 8), 0, 11.0, 0.3, bl);   // false beard
+  { const pr = [[1.15, 0], [1.2, 0.5], [1.05, 1.3], [0.9, 2.1], [0.65, 2.9], [0.4, 3.4], [0.0, 3.7]].map(q => new THREE.Vector2(q[0], q[1]));
+    put(new THREE.LatheGeometry(pr, 16), 0, 13.9, -0.95, wc); put(new THREE.CylinderGeometry(1.35, 1.3, 0.9, 16, 1, true), 0, 14.3, -0.95, lin(0.66, 0.2, 0.12)); }   // white crown in the red
   return mergeGeometries(parts.map(stripAttrs));
 }
 /* The Great Sphinx: a recumbent lion carved from the bedrock, facing the river. Each mass (haunches, body, chest,
@@ -1560,16 +1586,45 @@ function colossusGeo(){
    harder head better kept. +x is forward. */
 function sphinxGeo(){
   const parts = [], st = lin(0.88, 0.74, 0.52), dk = lin(0.6, 0.46, 0.3), pale = lin(0.93, 0.84, 0.66);
-  const part = (g, c, ero, k = 1, head = false) => {
+  const part = (g, c, ero, k = 1, head = false, stripe = 0) => {
     if (head){ g.translate(-17, -16, 0).scale(0.8, 0.8, 0.8).translate(17.6, 16, 0); c = [(c[0] - 17)*0.8 + 17.6, (c[1] - 16)*0.8 + 16, c[2]*0.8]; }   // the head is small for the body
     const p = g.attributes.position, col = new Float32Array(p.count*3);
     for (let i=0;i<p.count;i++){ const x = p.getX(i), y = p.getY(i), z = p.getZ(i), dx = x - c[0], dy = y - c[1], dz = z - c[2], l = Math.hypot(dx, dy, dz) || 1;
       const bed = 0.5 + 0.5*Math.sin(y*0.95 + 1.6*perlin(x*0.05, z*0.05)), soft = smoothstep(0.5, 0.86, bed), pit = 0.5 + 0.5*perlin(x*0.45 + z*0.2, y*0.5);
       const d = -ero*(0.5*soft + 0.3*pit)*smoothstep(0.3, 2.5, y);
       p.setXYZ(i, x + dx/l*d, y + dy/l*d*0.3, z + dz/l*d);
-      const tone = (0.88 + 0.16*perlin(x*1.7, y*1.9 + z))*lerp(0.72, 1, smoothstep(0, 7, y));
-      for (let j=0;j<3;j++) col[i*3+j] = lerp(lerp(st[j], dk[j], soft*0.75), pale[j], (1 - k)*0.6)*tone; }
+      // nemes stripes: alternate bands of the headcloth, the faint ochre and blue of their paint long weathered off
+      const sb = stripe ? smoothstep(0.38, 0.5, Math.abs(((y*1.55) % 1 + 1) % 1 - 0.5)) : 0;
+      const tone = (0.88 + 0.16*perlin(x*1.7, y*1.9 + z))*lerp(0.72, 1, smoothstep(0, 7, y))*(1 - 0.22*sb*stripe);
+      for (let j=0;j<3;j++) col[i*3+j] = lerp(lerp(lerp(st[j], dk[j], soft*0.75), pale[j], (1 - k)*0.6), [0.56, 0.57, 0.6][j], 0.4*sb*stripe)*tone; }
     g.setAttribute('color', new THREE.BufferAttribute(col, 3)); parts.push(g); };
+  // carved head (pre-scale space): an ellipsoid whose front is pressed onto a sculpted face field, so brow, sockets,
+  // the broken nose, lips and chin come from one mesh; the nemes is a second shell cut open around the face
+  const HC = [20.3, 24.4, 0];
+  const faceF = (ly, lz) => { const az = Math.abs(lz), g = (a, b) => Math.exp(-a*a - b*b);
+    let f = 3.3 - 0.42*(lz/2.5)**2 - 0.9*smoothstep(2.2, 3.4, az);
+    f += 0.42*g((ly - 1.6)/0.42, 0)*(1 - smoothstep(1.4, 2.5, az));                      // brow ridge
+    f -= 0.62*g((ly - 0.98)/0.36, (az - 1.15)/0.62) - 0.26*g((ly - 0.95)/0.2, (az - 1.15)/0.36);   // eye sockets and the lids within
+    f += Math.min(0.62, 1.15*smoothstep(1.35, 0.25, ly)*smoothstep(-0.95, -0.35, ly))*g(lz/0.44, 0);   // nose, broken off flat
+    f += 0.2*g((ly + 0.75)/0.35, (az - 0.62)/0.35);                                        // nostril wings
+    f += 0.2*g((ly + 1.25)/0.17, lz/1.0) + 0.17*g((ly + 1.62)/0.2, lz/0.85) - 0.14*g((ly + 1.43)/0.07, lz/1.05);   // lips and the mouth line
+    f += 0.12*g((ly + 0.4)/0.7, (az - 1.75)/0.6);                                          // cheekbones
+    f -= 0.95*smoothstep(-2.0, -3.3, ly) + 0.55*smoothstep(2.1, 3.6, ly);                  // chin and forehead fall away
+    return f; };
+  { const g = new THREE.SphereGeometry(1, 120, 90), p = g.attributes.position;
+    for (let i=0;i<p.count;i++){ const ly = p.getY(i)*5.4, lz = p.getZ(i)*4.1, lx = p.getX(i)*4.3; p.setXYZ(i, HC[0] + Math.min(lx, faceF(ly, lz)), HC[1] + ly, lz); }
+    g.computeVertexNormals(); part(g, HC, 0.1, 0.25, true); }
+  { const g = new THREE.SphereGeometry(1, 72, 56), p = g.attributes.position;
+    for (let i=0;i<p.count;i++){ let ly = p.getY(i)*5.75, lz = p.getZ(i)*4.45, lx = p.getX(i)*4.55;
+      const band = smoothstep(1.85, 2.0, ly)*(1 - smoothstep(2.6, 2.75, ly));
+      lx = Math.min(lx, ly > 1.9 ? 3.05 + 0.25*band : 2.45);                                // opening for the face, the forehead band above it
+      lz *= 1 + 0.5*smoothstep(1.6, -2.4, ly)*smoothstep(-0.5, 1.5, 3.2 - lx);               // lappet wings flare out to the shoulders
+      ly = Math.max(ly, -3.1);
+      const gr = 1 - 0.018*smoothstep(0.36, 0.5, Math.abs(((ly*1.55*0.8) % 1 + 1) % 1 - 0.5));   // shallow grooves between the stripes
+      p.setXYZ(i, HC[0] + lx*gr, HC[1] + ly, lz*gr); }
+    g.computeVertexNormals(); part(g, HC, 0.22, 0.5, true, 1); }
+  for (const sd of [-1, 1]) part(new THREE.SphereGeometry(1, 14, 12).scale(0.32, 1.0, 0.55).translate(HC[0] + 2.55, HC[1] + 0.55, sd*3.15), [HC[0] + 2.3, HC[1] + 0.5, sd*3.1], 0.05, 0.3, true);   // ears
+  part(new THREE.CylinderGeometry(0.22, 0.32, 1.1, 8).translate(HC[0] + 3.25, HC[1] + 2.65, 0), [HC[0] + 3, HC[1] + 2.5, 0], 0.05, 0.3, true);   // stump of the uraeus
   const sph = (sx, sy, sz, x, y, z, ero, k, head) => part(new THREE.SphereGeometry(1, 40, 22).scale(sx, sy, sz).translate(x, y, z), [x, y, z], ero, k, head);
   part(new THREE.BoxGeometry(92, 14, 36, 30, 6, 12).translate(-2, -5.8, 0), [-2, -20, 0], 1.6);   // the bedrock floor of the hollow it was cut from
   sph(30, 8.6, 9.6, -6, 9, 0, 1.0); sph(11.5, 9.5, 11, -26, 8.6, 0, 1.1); sph(9.5, 11.5, 10.5, 12, 11.2, 0, 1.0);
@@ -1577,16 +1632,11 @@ function sphinxGeo(){
     part(new THREE.CylinderGeometry(2.5, 2.9, 26, 18, 6).rotateZ(Math.PI/2).translate(26, 2.7, sd*5.3), [26, 2.7, sd*5.3], 0.5);
     sph(3.2, 2.5, 3.1, 39, 2.3, sd*5.3, 0.35);
     sph(10.5, 4.2, 4.2, -19, 3.6, sd*9.4, 0.8);   // folded hind legs
-    part(new THREE.BoxGeometry(2.4, 9, 3.4, 2, 6, 2).translate(21.6, 17.6, sd*5.6), [21.6, 17.6, sd*5.6], 0.4, 0.4, true);   // nemes lappets on the chest
+    { const g = new THREE.BoxGeometry(1.1, 6.5, 2.3, 2, 20, 3), p = g.attributes.position;   // nemes lappets falling onto the chest, rounded off and tapering
+      for (let i=0;i<p.count;i++){ const y = p.getY(i), t = (y + 3.25)/6.5; p.setZ(i, p.getZ(i)*lerp(0.85, 1.05, t)); p.setX(i, p.getX(i)*(1 - 0.3*Math.abs(p.getZ(i))/1.15) - 0.35*(1 - t)); }
+      part(g.translate(21.7, 18.6, sd*3.7), [21.2, 18.6, sd*3.7], 0.2, 0.4, true, 1); }
   }
   part(new THREE.CylinderGeometry(4.6, 6.6, 8, 24, 4).translate(17, 17.8, 0), [17, 17.8, 0], 0.6);
-  { const g = new THREE.BoxGeometry(7.5, 10.5, 15.5, 4, 6, 8), p = g.attributes.position;   // nemes headcloth flaring out behind the face
-    for (let i=0;i<p.count;i++){ const y = p.getY(i); p.setZ(i, p.getZ(i)*(y > 0 ? lerp(1, 0.52, y/5.25) : 1)); if (p.getX(i) < 0) p.setY(i, y - 1.2); }
-    g.translate(17.2, 23.5, 0); part(g, [17.2, 23.5, 0], 0.3, 0.5, true); }
-  sph(4.6, 5.6, 4.5, 20.6, 24.6, 0, 0.18, 0.2, true);
-  part(new THREE.BoxGeometry(1.8, 2.3, 1.9).translate(24.8, 23.8, 0), [24.8, 23.8, 0], 0.15, 0.3, true);   // the (broken) nose
-  part(new THREE.BoxGeometry(1.4, 1.1, 6.8).translate(24.3, 26.7, 0), [24.3, 26.7, 0], 0.1, 0.3, true);   // brow
-  part(new THREE.BoxGeometry(1.0, 0.7, 3.6).translate(25.0, 21.6, 0), [25.0, 21.6, 0], 0.1, 0.3, true);   // mouth
   { const b = geoBuf(), pts = []; for (let i=0;i<=10;i++){ const t = i/10; pts.push(V3(-34 + t*16, 2 + 3.2*Math.sin(t*Math.PI*0.8), 11.5 + 1.5*Math.sin(t*2))); }   // tail curled along the right flank
     tubeInto(b, pts, pts.map((_, i) => 1.3 - i*0.06), 10, { ao:() => 1 }); const g = geoFinish(b); g.deleteAttribute('uv'); part(g, [-26, 3, 11], 0.3); }
   const g = mergeGeometries(parts.map(q => worldUV(stripAttrs(q), 4)));
@@ -2257,7 +2307,16 @@ Helios.registerBiome({
       return { map:mkDataTex(A,S,true), normal:mkDataTex(heightNormal(H,S,4),S,false) }; })();
     const sandTex = masonryTex('sand', 21, { course:64, w:[96,224], mortar:3, a:[0.84,0.7,0.5], b:[0.93,0.8,0.6], k:5 });
     const mudTex = masonryTex('mud', 31, { course:32, w:[48,96], mortar:2, a:[0.58,0.43,0.28], b:[0.7,0.54,0.37], k:4 });
-    const gly = glyphTex(); gly.map.repeat.set(1.15, 1.15); gly.normal.repeat.set(1.15, 1.15);
+    const gly = { ...glyphTex() }; gly.normal.repeat.set(1.15, 1.15);
+    // the carved signs keep traces of their paint: blue, red, green and ochre per sign, the column rules in blue
+    gly.map = TEXCACHE.glyphPaint ??= (() => { const src = glyphTex().map.image.data, S = 512, A = new Uint8Array(src.length), r = rng(909);
+      const pig = [[0.2, 0.36, 0.62], [0.68, 0.24, 0.15], [0.24, 0.46, 0.36], [0.84, 0.62, 0.2], [0.2, 0.36, 0.62], [0.12, 0.1, 0.08]], pick = new Uint8Array(8*20).map(() => (r()*pig.length)|0);
+      for (let y=0;y<S;y++) for (let x=0;x<S;x++){ const o = (y*S + x)*4, h = clamp((src[o]/255/0.8 - 0.55)/0.55, 0, 1), cut = smoothstep(0.75, 0.35, h), cx = x % 64;
+        const pg = cx < 3 || cx > 61 ? pig[0] : pig[pick[(x >> 6)*20 + Math.min(19, ((S - 1 - y)/26)|0)]], fade = 0.4 + 0.35*hash2(x*0.13, y*0.11);
+        for (let j=0;j<3;j++) A[o+j] = clamp(lerp(src[o+j]/255, pg[j]*(0.6 + 0.4*h), cut*fade), 0, 1)*255;
+        A[o+3] = 255; }
+      return mkDataTex(A, S, true); })();
+    gly.map.repeat.set(1.15, 1.15);
     const limeMat = new THREE.MeshStandardMaterial({ vertexColors:true, map:grain.map, normalMap:grain.normal, normalScale:new THREE.Vector2(0.9,0.9), roughness:0.92 });
     const sandMat = new THREE.MeshStandardMaterial({ vertexColors:true, map:sandTex.map, normalMap:sandTex.normal, normalScale:new THREE.Vector2(1.2,1.2), roughness:0.88 });
     const mudMat = new THREE.MeshStandardMaterial({ vertexColors:true, map:mudTex.map, normalMap:mudTex.normal, roughness:0.96 });
@@ -2366,7 +2425,9 @@ Helios.registerBiome({
     sc.forEach(o => group.add(o.group));
 
     const boats=[]; for (let i=0;i<9;i++){ const b=flora.boat(); b.userData={ z:-1300+R()*1500, lane:(R()-0.5)*1.1, sp:(R()<0.5?-1:1)*(2.2+R()*2.5) }; group.add(b); boats.push(b); }
-    return { group, heightAt, materialAt:(x,z) => { const y = heightAt(x,z); return y < 0.6 ? 'water' : blocked(x,z) ? 'stone' : isField(x,y,z) ? 'vegetation' : 'sand'; }, update(dt, env){
+    return { group, heightAt, exposureK:1, envK:1, hemiTint:Object.assign(new THREE.Color(0.36, 0.38, 0.44), { k:0 }), materialAt:(x,z) => { const y = heightAt(x,z); return y < 0.6 ? 'water' : blocked(x,z) ? 'stone' : isField(x,y,z) ? 'vegetation' : 'sand'; }, update(dt, env){
+      // a high desert sun: less sky fill and a touch less exposure, so pale limestone and sand keep their shading instead of bleaching flat
+      { const nk = smoothstep(0.35, 1.0, S.sun[1]); this.exposureK = 1 - 0.12*nk; this.envK = 1 - 0.35*nk; this.hemiTint.k = 0.5*nk; }
       for (const b of boats){ const u=b.userData; u.z += u.sp*dt; if (u.z>350) u.z=-1500; if (u.z<-1500) u.z=350;
         const z=u.z, x=cx(z)+u.lane*nw(z)*0.6, dx=0.12+35*0.0035*Math.cos(z*0.0035), sg=Math.sign(u.sp);
         b.position.set(x, 0.1*Math.sin(env.time+u.lane*9), z); b.rotation.y = Math.atan2(dx*sg, sg); b.rotation.z = 0.03*Math.sin(env.time*0.8+u.lane*5); }
@@ -4080,24 +4141,25 @@ Helios.registerBiome({
     const TG = new Map(), tKey = (x,z) => Math.floor(x/16) + ',' + Math.floor(z/16);
     trails.forEach((T, ti) => { if (T.kind === 0) return; T.pts.forEach((p, i) => { const kk = tKey(p[0], p[1]); if (!TG.has(kk)) TG.set(kk, []); TG.get(kk).push(p); }); });
     const trailD = (x,z) => { let b = 99; const ci = Math.floor(x/16), cj = Math.floor(z/16); for (let i=-1;i<=1;i++) for (let j=-1;j<=1;j++){ const L = TG.get((ci + i) + ',' + (cj + j)); if (L) for (const p of L) b = Math.min(b, Math.hypot(x - p[0], z - p[1])); } return b; };
-    const forestK = (x,z) => {
+    const forestKH = (x,z,lo = 45,hi = 115) => {
       const q = lakeQ(x,z); if (q < 1.03) return 0;
       let f = smoothstep(1.03, 1.18, q) * smoothstep(1.15, 1.6, pondQ(x,z));
       f *= 1 - smoothstep(1050, 1480, Math.hypot(x*0.92, z + 520));
-      f *= 1 - smoothstep(45, 115, ground(x,z));
+      f *= 1 - smoothstep(lo, hi, ground(x,z));
       f *= smoothstep(-0.34, -0.12, perlin(x*0.0042 + 11, z*0.0042));   // bogs and clearings
       if (f > 0) f *= smoothstep(2.5, 6, trailD(x,z));
       return f;
     };
+    const forestK = (x,z) => forestKH(x,z), forestHill = (x,z) => forestKH(x,z,80,175);   // the hills ringing the lake stay wooded up to ~120 m
     const tundraK = (x,z) => smoothstep(0.35, 0.05, forestK(x,z)) * smoothstep(1.6, 2.4, lakeQ(x,z)) * smoothstep(1.4, 2, pondQ(x,z));
     const iceAt = (x,z) => ground(x,z) < ICE_Y;
 
     // ---- Terrain: wind-rippled deep snow, greyer under the trees, scoured brown-and-lichen ridges on the tundra
     const canopy = (x,z) => 13*(1 - smoothstep(-1700, -2500, z))*(0.75 + 0.35*perlin(x*0.01, z*0.01))*smoothstep(-0.3, -0.05, perlin(x*0.0042 + 11, z*0.0042));
     const canopyTint = (c,x,y,z) => { const l = canopy(x,z); if (l < 2) return srgb(c, 0.86, 0.9, 0.97); const m = 0.5 + 0.5*perlin(x*0.06, z*0.06), n = 0.5 + 0.5*perlin(x*0.013, z*0.013); return srgb(c, 0.15 + 0.3*m*n, 0.2 + 0.3*m*n, 0.2 + 0.34*m*n); };
-    group.add(makeTerrain({ size:TS, cx:TCX, cz:TCZ, seg:520, height:ground, apron:{ size:12000, seg:150, lift:canopy, tint:canopyTint },
-      detail:{ rock:[0.3,0.3,0.31], rockLo:0.36, bump:10, ripple:0.45, wet:0, snow:1, grain:1, strata:0.6 },
-      kind:(x,y,z)=> y > ICE_Y && pondQ(x,z) < 0.98 ? 3 : 0,
+    const terr = makeTerrain({ size:TS, cx:TCX, cz:TCZ, seg:520, height:ground, apron:{ size:12000, seg:150, lift:canopy, tint:canopyTint },
+      detail:{ rock:[0.3,0.3,0.31], rockLo:0.36, bump:10, ripple:0.16, wet:0, snow:1, grain:1, strata:0.6 },
+      kind:(x,y,z)=> y > ICE_Y && pondQ(x,z) < 0.98 ? 3 : -forestHill(x,z),   // negative kind carries the stand density (no terrain effect reads below 0)
       color:(c,x,y,z,ny)=>{
         if (y < ICE_Y - 0.05) return srgb(c, 0.1, 0.13, 0.15);
         if (pondQ(x,z) < 0.98) return srgb(c, 0.6, 0.72, 0.8);
@@ -4109,7 +4171,32 @@ Helios.registerBiome({
         col = col.map((v, i) => lerp(v, tun[i], scour));
         const shore = smoothstep(1.16, 1.0, lakeQ(x,z))*0.35; col = col.map((v, i) => lerp(v, [0.7, 0.66, 0.55][i], shore));
         return srgb(c, col[0], col[1], col[2]);
-      } }));
+      } });
+    group.add(terr);
+    // Snow and far forest: soft wind-carved drifts instead of fine ripples, cold blue fill in the shade, denser glints;
+    // far off, the floor of a stand takes the dark, snow-flecked tone of the canopy so the forest reads as a mass between impostors
+    { const m = terr.material, prev = m.onBeforeCompile;
+      m.onBeforeCompile = function(sh, r){ prev.call(this, sh, r);
+        sh.fragmentShader = sh.fragmentShader
+          .replace('diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9, 0.93, 0.97)*(0.93 + 0.07*n2), sSnow);', `diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9, 0.93, 0.97)*(0.93 + 0.07*n2), sSnow);
+            { float dist = length(vViewPosition), fk = clamp(-vKind, 0.0, 1.0)*smoothstep(170.0, 650.0, dist);
+              fk = max(fk, 0.9*smoothstep(900.0, 1700.0, dist)*smoothstep(6.0, 30.0, vWP.y)*(1.0 - smoothstep(170.0, 260.0, vWP.y))*smoothstep(0.32, 0.6, tvn(twp*0.0035) + 0.25*tvn(twp*0.013)));   // a boreal mantle on the far hills
+              float fl = smoothstep(0.35, 0.75, tvn(twp*0.21) + 0.35*tvn(twp*0.9));
+              diffuseColor.rgb = mix(diffuseColor.rgb, mix(vec3(0.028, 0.042, 0.038), vec3(0.5, 0.56, 0.64), 0.12 + 0.3*fl), fk*0.85); }`)
+          .replace('diffuseColor.rgb *= (0.74 + 0.5*n3) * (0.86 + 0.28*n1) * (0.93 + 0.14*n2) * mix(1.0, 0.94 + 0.12*n4, uTE.z);', `float snk = smoothstep(0.55, 0.75, dot(vColor.rgb, vec3(0.3333)));   // snow-white ground keeps little of the dirt mottling
+            diffuseColor.rgb *= mix((0.74 + 0.5*n3) * (0.86 + 0.28*n1) * (0.93 + 0.14*n2) * mix(1.0, 0.94 + 0.12*n4, uTE.z), 0.92 + 0.12*n3, snk);`)
+          .replace('diffuseColor *= texture2D(map, vWP.zy/7.0)*an.x +', 'vec4 tsn = texture2D(map, vWP.zy/7.0)*an.x +')
+          .replace('texture2D(map, vWP.xy/7.0)*an.z; }', 'texture2D(map, vWP.xy/7.0)*an.z; diffuseColor *= mix(tsn, mix(texture2D(map, vec2(0.5), 12.0), tsn, 0.25), smoothstep(0.55, 0.75, dot(vColor.rgb, vec3(0.3333)))); }')
+          .replace('*(1.0 - 0.75*sSnow));', '*(1.0 - 0.94*max(sSnow, snk)));')   // deep snow buries the ground's fine relief
+          .replace('step(0.988, hgl)', 'step(0.981, hgl)').replace('smoothstep(4.0, 30.0, length(vViewPosition))', 'smoothstep(5.0, 48.0, length(vViewPosition))')
+          .replace('nw = normalize(nw - vec3((h1 - h0)/e', `{ float drift = max(smoothstep(0.55, 0.75, dot(vColor.rgb, vec3(0.3333))), sSnow)*(1.0 - rk)*(1.0 - ice)*f0;
+              vec2 dq = mat2(0.94, 0.34, -0.34, 0.94)*twp; float ph = dq.x*0.55 + 1.4*tvn(dq*0.08) + 0.6*tvn(dq*0.31), sl = cos(ph)*(0.6 + 0.4*sin(ph*0.5 + dq.y*0.05))*0.55;
+              nw = normalize(nw - vec3(0.94*sl, 0.0, -0.34*sl)*drift*0.12); }   // long drifts across the wind (phase gradient taken along x only)
+            nw = normalize(nw - vec3((h1 - h0)/e`)
+          .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+            { float snowL = smoothstep(0.55, 0.8, dot(diffuseColor.rgb, vec3(0.3333))); reflectedLight.indirectDiffuse *= mix(vec3(1.0), vec3(0.86, 0.95, 1.12), snowL); }`);
+      };
+      const pk = m.customProgramCacheKey; m.customProgramCacheKey = () => pk.call(m) + 'taigaS'; }
 
     // ---- Forest: spruce in two forms, bare birch, wind-flagged krummholz at the treeline
     const needles = () => ATLAS.taigaNeedles ??= taigaNeedleAtlas(), twigs = () => ATLAS.taigaTwigs ??= taigaTwigAtlas();
@@ -4135,6 +4222,13 @@ Helios.registerBiome({
       if (f > 0.15 && R() < 0.5*f){ const yx = x + (R() - 0.5)*STEP, yz = z + (R() - 0.5)*STEP; if (!keepOut(yx, yz) && forestK(yx, yz) > 0.1) F.add('taigaSpruce', yx, ground(yx, yz) - 0.15, yz, 0.12 + R()*0.22, R()*TAU, tint()); }   // young spruce in the gaps
       else if ((f > 0.01 && f < 0.45 && R() < 0.12) || (f <= 0.01 && tundraK(x,z) > 0.3)) F.add('taigaKrumm', x, y + 0.2, z, 0.6 + R()*0.7, (R() - 0.5)*0.4, tint());
     }
+    // the higher hillsides, wooded from their own seed so the stands near the start keep their layout
+    { const R2 = rng(1515);
+      for (let gx=-1520; gx<1520; gx+=STEP) for (let gz=-2060; gz<1060; gz+=STEP){
+        const x = gx + (R2() - 0.5)*STEP*0.95, z = gz + (R2() - 0.5)*STEP*0.95, p = R2(); if (Math.hypot(x*0.92, z + 520) > 1560) continue;
+        const gh = ground(x,z); if (gh < 45 || gh > 175) continue;
+        const ex = forestHill(x,z) - forestK(x,z); if (ex < 0.02 || p > ex*0.9) continue;
+        F.add(R2() < 0.45 ? 'taigaSpruceTall' : 'taigaSpruce', x, ground(x,z) - 0.3, z, (0.6 + R2()*0.6)*(0.75 + 0.25*ex), R2()*TAU, new THREE.Color(0.88 + R2()*0.24, 0.9 + R2()*0.2, 0.88 + R2()*0.24)); } }
     group.add(F.build());
 
     // ---- Ice, snow-capped rocks, fallen spruce and stumps (static, instanced; their caps grow with the snowfall)
@@ -4409,7 +4503,7 @@ Helios.registerBiome({
     // ---- Systems state
     const stress = new Map(); let lastX = S.pos.x, lastZ = S.pos.z, strideAcc = 0, foot = 1, stressT = 0, freezeT = 0, through = 0, stressHere = 0;
     const BLIZ = { kind:'snow', color:0xffffff, size:0.13, fall:2.8, sway:5.5, base:0.15, storm:1.0, rainLines:false, lightning:false };
-    const world = { group, materialAt:(x,z) => { if (iceAt(x,z)) return inLake(x,z) && brokenAt(x,z) ? 'water' : 'ice'; if (pondQ(x,z) < 0.98) return 'ice'; const f = forestK(x,z); return f > 0.5 ? 'organic' : tundraK(x,z) > 0.6 && ridged(x*0.009, z*0.009, 3) > 0.55 ? 'stone' : 'snow'; },
+    const world = { group, fogTint:new THREE.Color(), materialAt:(x,z) => { if (iceAt(x,z)) return inLake(x,z) && brokenAt(x,z) ? 'water' : 'ice'; if (pondQ(x,z) < 0.98) return 'ice'; const f = forestK(x,z); return f > 0.5 ? 'organic' : tundraK(x,z) > 0.6 && ridged(x*0.009, z*0.009, 3) > 0.55 ? 'stone' : 'snow'; },
       heightAt:(x,z) => { const g = ground(x,z); if (g >= ICE_Y || !inLake(x,z)) return Math.max(g, ICE_Y*0.5); return brokenAt(x,z) ? -1.3 : ICE_Y; },
       onImpact(el, p, radius, k = 1){
         if (!iceAt(p.x, p.z) || !inLake(p.x, p.z)) return;
@@ -4437,7 +4531,9 @@ Helios.registerBiome({
         const rk = env.rain, gust = 0.5 + 0.5*Math.sin(t*0.9)*Math.sin(t*0.37 + 1);
         world.windK = 1 + rk*(0.5 + 0.6*gust); world.precip = rk > 0.25 ? BLIZ : null;
         const dawn = (1 - smoothstep(0.05, 0.35, S.sun[1]))*smoothstep(-0.15, 0.0, S.sun[1])*(1 - rk);
-        world.fogK = (1 + 0.35*gust*rk)*(1 + 1.6*dawn*smoothstep(500, 150, Math.hypot(S.pos.x - LK.x, S.pos.z - LK.z)));
+        world.fogK = (1 + 0.35*gust*rk)*(1 + 0.7*dawn*smoothstep(500, 150, Math.hypot(S.pos.x - LK.x, S.pos.z - LK.z)));
+        // a low sun keeps the haze cold (frost haze, not golden dust), so the far shore and hills read as layered blue forest
+        world.fogTint.setRGB(0.6, 0.67, 0.78).multiplyScalar(0.3 + 0.7*env.day); world.fogTint.k = 0.6*(1 - smoothstep(0.3, 0.8, S.sun[1]))*(1 - env.night)*(1 - rk);
         sdMat.uniforms.uWindV.value.set(env.wind[0], env.wind[1]); sdMat.uniforms.uT.value = t; sdMat.uniforms.uEye.value = clamp(S.pos.y - world.heightAt(S.pos.x, S.pos.z), 0, 40);
         sdMat.uniforms.uAmt.value = clamp(rk*1.2 + 0.15*smoothstep(4, 9, Math.hypot(env.wind[0], env.wind[1])), 0, 1)*(1 - smoothstep(6, 25, sdMat.uniforms.uEye.value));
         mist.forEach((m, i) => { m.material.map.offset.x += dt*0.002*(i + 1); m.material.color.copy(scene.fog.color); m.material.opacity = dawn*(i ? 0.18 : 0.3); });
@@ -6121,6 +6217,7 @@ Helios.registerBiome({
   sky:{ turbidity:6, rayleigh:1.8, mie:0.012, mieG:0.84 },
   fog:{ density:0.0042, tint:[0.88,0.97,0.94], storm:0.8, stormTint:[0.5,0.56,0.54] },
   ground:[0.17,0.2,0.1],
+  post:{ bloom:0.55, thresh:0.84, ao:0.72, aoR:2.2, contrast:0.3, sat:1.04, vig:0.3 },   // humid air: softer contrast, wider contact shade under reeds and roots
   camera:{ pos:[1.5,2.6,82], look:[-14,3.2,-40] },
   build(k){
     const { noise:{fbm,perlin}, smoothstep, lerp, srgb } = k;
@@ -6156,7 +6253,11 @@ Helios.registerBiome({
         const col = [0.24 + 0.06*n, 0.27 + 0.06*n, 0.11].map((v, i) => lerp(lerp(v, [0.46, 0.19, 0.13][i], red), [0.44, 0.41, 0.24][i], dry*0.7));
         return srgb(c, col[0], col[1], col[2]);
       } }));
-    const water = makeWater({ size:10000, cz:-300, color:0x1d2414, distortion:0.7, scale:6 }); group.add(water);
+    const water = makeWater({ size:10000, cz:-300, color:0x1d2414, distortion:0.4, scale:6 }); group.add(water);
+    // still, tannin-dark swamp water: a lower base reflectance, so pools look into brown depth and mirror the trees at grazing angles
+    // instead of throwing back the sky as white speckle in every shallow puddle between the hummocks
+    if (water.material.isShaderMaterial) water.material.fragmentShader = water.material.fragmentShader.replace('float rf0 = 0.3;', 'float rf0 = 0.1;')
+      .replace('vec3 scatter = max( 0.0, dot( surfaceNormal, eyeDirection ) ) * waterColor;', 'vec3 scatter = (0.35 + 0.65*max( 0.0, dot( surfaceNormal, eyeDirection ) )) * waterColor;');
 
     // ---- Boardwalks on piles, a ramp to the stilted bird hide; deck heights interpolate along each run
     const HUT = { x:72, z:-171, y:2.7 };
@@ -6391,7 +6492,7 @@ Helios.registerBiome({
       if (depth > 0.04) return { f:g - 0.12, mode:'wade', depth };
       const m = mudAt(x, z), sink = m.soft*(0.06 + 0.22*m.wet); return { f:g - sink, mode:'mud', depth:0, sink, m };
     };
-    const world = { group, heightAt, fogK:1,
+    const world = { group, heightAt, fogK:1, fogTint:new THREE.Color(),
       floorAt:(x, z, y) => floorInfo(x, z, y).f,
       ceilingAt:(x, z, y) => { if (inHut(x, z)) return y < HUT.y + 0.5 ? HUT.y - 0.15 : HUT.y + 2.95; const d = deckAt(x, z); return d !== null && y < d - 0.3 ? d - 0.12 : Infinity; },
       materialAt:(x, z) => { const g = ground(x, z); if (deckAt(x, z) !== null) return { id:'wood', flammability:0.35 };
@@ -6522,6 +6623,8 @@ Helios.registerBiome({
         // fog and mist: thickest at dawn and at night, wrapped around the viewer
         const dawn = (1 - smoothstep(0.05, 0.4, S.sun[1]))*smoothstep(-0.2, 0.0, S.sun[1]);
         world.fogK = 1 + 0.55*dawn + 0.25*env.night + 0.3*rk;
+        // swamp haze stays a damp grey-green under a low sun rather than desert gold, so the trunk rows recede in depth
+        world.fogTint.setRGB(0.6, 0.66, 0.62).multiplyScalar(0.3 + 0.7*env.day); world.fogTint.k = 0.45*(1 - smoothstep(0.3, 0.8, S.sun[1]))*(1 - env.night);
         mist.userData.tick(t); mist.material.uniforms.uDrift.value.set(env.wind[0]*0.25, 0, env.wind[1]*0.25); mist.material.uniforms.uOpacity.value = 0.22 + 0.2*dawn + 0.1*env.night;
         { const b = mist.geometry.attributes.aBase; let ch = false; for (let i=0;i<b.count;i++){ const ox = b.getX(i) - S.pos.x, oz = b.getZ(i) - S.pos.z; if (Math.abs(ox) > MR || Math.abs(oz) > MR){ b.setX(i, S.pos.x + ((ox + MR*3) % (MR*2)) - MR); b.setZ(i, S.pos.z + ((oz + MR*3) % (MR*2)) - MR); ch = true; } } if (ch) b.needsUpdate = true; }
         sheets.forEach((m, i) => { m.position.set(S.pos.x, st.wl + m.userData.y, S.pos.z); m.material.map.offset.set(S.pos.x/175 + t*0.002*(i + 1), S.pos.z/175); m.material.color.copy(scene.fog.color); m.material.opacity = (0.1 + 0.18*dawn + 0.08*rk)*(i ? 0.6 : 1); });
@@ -6543,9 +6646,15 @@ uniform vec4 uDCaus; uniform vec3 uDSunV; uniform vec2 uDT; uniform vec4 uDCave[
 float deepH(vec2 p){ vec3 q = fract(vec3(p.xyx)*0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y)*q.z); }
 float deepVn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0 - 2.0*f);
   return mix(mix(deepH(i), deepH(i + vec2(1.0, 0.0)), f.x), mix(deepH(i + vec2(0.0, 1.0)), deepH(i + vec2(1.0, 1.0)), f.x), f.y); }
-float deepCaus(vec3 w, float t){ vec2 p = w.xz*0.38 + w.y*vec2(0.13, 0.09);
-  float c1 = 1.0 - abs(2.0*deepVn(p + vec2(t*0.23, t*0.15)) - 1.0), c2 = 1.0 - abs(2.0*deepVn(p*1.37 - vec2(t*0.17, t*0.25) + 9.0) - 1.0);
-  return pow(min(c1, c2), 4.0)*1.6 + 0.12*pow(c1*c2, 2.0); }
+// iterated-warp caustic net (no lattice, so no grid at grazing light); a second, slower layer breaks its tiling
+float deepCausN(vec2 q, float t){ vec2 p = mod(q, 6.2832) - 250.0, i = p; float c = 1.0;
+  for (int n=0;n<4;n++){ float tt = t*(1.0 - 3.5/float(n + 1)); i = p + vec2(cos(tt - i.x) + sin(tt + i.y), sin(tt - i.y) + cos(tt + i.x));
+    c += 1.0/length(vec2(p.x/(sin(i.x + tt)/0.006), p.y/(cos(i.y + tt)/0.006))); }
+  c = 1.17 - pow(c/4.0, 1.4); return pow(abs(c), 7.0); }
+float deepCaus(vec3 w, float t){ vec2 p = w.xz*0.21 + w.y*vec2(0.07, 0.05);
+  float a = deepCausN(p*6.2832, t*0.55), b = deepCausN(p.yx*4.1 + vec2(1.3, 2.9), t*0.37 + 4.0);
+  float m = 0.55 + 0.45*deepVn(w.xz*0.045 + t*0.02);
+  return (a*0.8 + b*0.45)*m*1.5; }
 float deepCaveShade(vec3 w){ float k = 1.0;
   for (int i=0;i<4;i++){ vec4 c = uDCave[i]; vec2 d = (w.xz - c.xy)/c.z; float r2 = dot(d, d);
     if (r2 < 1.0 && w.y < c.w - 1.5){ float roof = c.w; k = min(k, mix(0.12, 1.0, smoothstep(0.75, 1.0, sqrt(r2)))); } }
@@ -6678,6 +6787,7 @@ Helios.registerBiome({
   fog:{ density:0.016, tint:[1,1,1] },
   ground:[0.05,0.22,0.26],
   precip:{ kind:'none', rainLines:false, lightning:false },
+  post:{ shafts:0, bloom:0.6, thresh:0.78, ao:0.55, aoR:1.3, sat:1.05, contrast:0.16, vig:0.3, fringe:0.009 },   // the world draws its own light shafts
   camera:{ pos:[122,-24,-206], look:[151,-25,-288] },
   build(k){
     const { noise:{ fbm, ridged, perlin }, smoothstep, lerp, srgb, lin, scatter, plantMat, bladeClump, boulderGeo } = k;
@@ -6724,13 +6834,24 @@ Helios.registerBiome({
       return srgb(c, col[0], col[1], col[2]);
     };
     const terr = makeTerrain({ size:2800, cz:-450, seg:560, height:ground, apron:{ size:9000, seg:110 }, color:tcol,
-      detail:{ rock:[0.34,0.31,0.28], rockLo:0.3, bump:6, ripple:0.9, wet:0, strata:1 } });
+      detail:{ rock:[0.34,0.31,0.28], rockLo:0.3, bump:6, ripple:0.6, wet:0, strata:1 } });
     deepCausticMat(terr.material); group.add(terr);
+    // deep down the value-noise bump reads as a grid under the vent lamps: fade it into lattice-free sediment swells
+    { const m = terr.material, prev = m.onBeforeCompile, pk = m.customProgramCacheKey;
+      m.onBeforeCompile = function(sh, r){ prev.call(this, sh, r);
+        sh.fragmentShader = sh.fragmentShader.replace('normal = normalize(mat3(viewMatrix) * nw);', `{
+            float dK = smoothstep(-240.0, -380.0, vWP.y), dd = 1.0 - smoothstep(20.0, 90.0, length(vViewPosition));
+            vec2 q = vWP.xz; float c1 = cos(dot(q, vec2(0.83, 0.56))*0.9 + 2.0*sin(q.y*0.11 + q.x*0.07)), c2 = cos(dot(q, vec2(-0.42, 0.91))*1.7 + 1.5*sin(q.x*0.09));
+            vec2 gq = vec2(0.75*c1 - 0.43*c2, 0.5*c1 + 0.93*c2);   // gradient of two warped sine swells (warp terms left out)
+            nw = normalize(mix(nw, normalize(vWN), dK*0.92) - dK*dd*0.07*vec3(gq.x, 0.0, gq.y)); }
+          normal = normalize(mat3(viewMatrix) * nw);`);
+      };
+      m.customProgramCacheKey = () => pk.call(m) + 'deepN'; }
 
     // ---- The sea surface seen from below: Snell's window onto the sky, total internal reflection outside it
     const surfMat = new THREE.ShaderMaterial({ fog:true, side:THREE.FrontSide,
       uniforms:THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { tN:{ value:tex.waterNormals }, uT:{ value:0 }, uSky:{ value:new THREE.Color() }, uHor:{ value:new THREE.Color() },
-        uDeep:{ value:new THREE.Color() }, uSun:{ value:V3(0, 1, 0) }, uSunC:{ value:new THREE.Color() }, uChop:{ value:1 }, uRain:{ value:0 } }]),
+        uDeep:{ value:new THREE.Color() }, uSun:{ value:V3(0, 1, 0) }, uSunC:{ value:new THREE.Color() }, uChop:{ value:1 }, uRain:{ value:0 }, uUpK:{ value:0 } }]),
       vertexShader:`
         #include <common>
         #include <fog_pars_vertex>
@@ -6744,7 +6865,7 @@ Helios.registerBiome({
         #include <common>
         #include <fog_pars_fragment>
         #include <logdepthbuf_pars_fragment>
-        uniform sampler2D tN; uniform float uT, uChop, uRain; uniform vec3 uSky, uHor, uDeep, uSun, uSunC; varying vec3 vW;
+        uniform sampler2D tN; uniform float uT, uChop, uRain, uUpK; uniform vec3 uSky, uHor, uDeep, uSun, uSunC; varying vec3 vW;
         float rh(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233)))*43758.5453); }
         void main(){
           #include <logdepthbuf_fragment>
@@ -6769,7 +6890,9 @@ Helios.registerBiome({
           gl_FragColor = vec4(col + uSunC*sparkle*0.05, 1.0);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
-          #include <fog_fragment>
+          #ifdef USE_FOG   // the water overhead glows brighter than the water ahead: daylight comes down through it
+            gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColor*(1.0 + uUpK*smoothstep(0.0, 0.75, V.y)), 1.0 - exp(-fogDensity*fogDensity*vFogDepth*vFogDepth));
+          #endif
         }` });
     const surface = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000).rotateX(Math.PI/2), surfMat); surface.frustumCulled = false; group.add(surface);
     // the body of water around the viewer: a fully fogged shell that hides the sky dome, clouds and stars behind it
@@ -7024,6 +7147,8 @@ Helios.registerBiome({
         fishM.setColorAt(fish.length - 1, new THREE.Color(tint[0]*(0.8 + R()*0.4), tint[1]*(0.8 + R()*0.4), tint[2]*(0.8 + R()*0.4))); } });
     fishM.frustumCulled = false; group.add(fishM);
     const school = SCH.map(([x, z, y, rad], si) => ({ cx:x, cz:z, cy:y, rad, a:R()*TAU, w:(0.04 + R()*0.04)*(R() < 0.5 ? -1 : 1), panic:V3(), px:x, py:y, pz:z }));
+    const sAcc = school.map(() => ({ x:0, y:0, z:0, vx:0, vy:0, vz:0 }));
+    fish.forEach(f => { f.y += (R() - 0.5)*4; const sc = school[f.si]; f.vx = -Math.sin(sc.a)*sc.w*sc.rad; f.vz = Math.cos(sc.a)*sc.w*sc.rad*0.7; });
     const lanternMat = critterMat('fish', 0.4); lanternMat.emissive = new THREE.Color(0.1, 0.7, 1.0); lanternMat.emissiveIntensity = 1.2;
     const lantM = new THREE.InstancedMesh(fishGeo(), lanternMat, 80), lant = [];
     for (let i=0;i<80;i++){ const a = R()*TAU, d = R()*260; lant.push({ cx:150 + Math.cos(a)*d, cz:-760 + Math.sin(a)*d*0.6, y:-230 - R()*40, a:R()*TAU, w:(0.1 + R()*0.15)*(R() < 0.5 ? -1 : 1), rad:6 + R()*20 }); }
@@ -7090,8 +7215,8 @@ Helios.registerBiome({
     // ---- World state
     const st = { v:V3(), cur:V3(), curLab:'', zone:'', siltK:0, siltAt:V3(0, -1e5, 0), msg:'', msgT:0, exhale:1.5, vy:0, creak:0, burst:0, inCave:false, lampK:0, ventBurst:0, kelpCur:V3(), sideIn:CAVES.map(() => false), zoneT:0 };
     const say = (m, t = 4) => { st.msg = m; st.msgT = t; };
-    const fogCol = new THREE.Color(), _cc = new THREE.Color(), envCol = new THREE.Color();
-    const world = { group, heightAt, precip:null, fogK:1, windK:0.6, lightK:1, envK:1, exposureK:1, ownsFireStatus:true,
+    const fogCol = new THREE.Color(), fogLin = new THREE.Color(), _cc = new THREE.Color(), envCol = new THREE.Color();
+    const world = { group, heightAt, precip:null, fogK:1, windK:0.6, lightK:1, envK:1, exposureK:1, ownsFireStatus:true, post:{},
       fogTint:new THREE.Color(), hemiTint:new THREE.Color(0.32, 0.72, 0.82), envTint:new THREE.Color(0.01, 0.05, 0.08) };
     world.fogTint.k = 1; world.hemiTint.k = 0.85;
     world.materialAt = () => 'water';
@@ -7152,7 +7277,7 @@ Helios.registerBiome({
       return out.join(' · ');
     };
 
-    let snowOff = V3(), plankOff = V3(), lastY = S.pos.y;
+    let snowOff = V3(), plankOff = V3(), lastY = S.pos.y; const tintV = [1, 1, 1];
     world.update = (dt, env) => {
       const t = env.time, d = Math.max(0, -S.pos.y), rain = env.rain, silty = smoothstep(1.2, 4.8, env.fog), shallow = 1 - smoothstep(8, 60, d);
       st.curLab = currentAt(S.pos.x, S.pos.y, S.pos.z, t, rain, st.cur);
@@ -7185,24 +7310,29 @@ Helios.registerBiome({
       const c = [lerp(lerp(0.04, 0.012, t1), 0.003, t2), lerp(lerp(0.33, 0.13, t1), 0.01, t2), lerp(lerp(0.42, 0.26, t1), 0.026, t2)];
       const mixc = (k2, q) => { for (let j=0;j<3;j++) c[j] = lerp(c[j], q[j], k2); };
       mixc(rain*shallow*0.55, [0.16, 0.24, 0.25]); mixc(silty*0.65 + siltNear*0.7, [0.24, 0.25, 0.17]);
-      const bright = (0.06 + 0.94*dayL)*(1 - 0.35*rain);
-      fogCol.setRGB(c[0]*bright, c[1]*bright, c[2]*bright, THREE.SRGBColorSpace); world.fogTint.copy(fogCol);
-      world.envTint.copy(fogCol).multiplyScalar(0.6);
+      const bright = (0.1 + 0.9*dayL)*(1 - 0.35*rain);
+      // fog is blended after the output encode, so the water colour is display-referred; lit uses (sky light, the surface) take it linear
+      fogCol.setRGB(c[0]*bright, c[1]*bright, c[2]*bright); world.fogTint.copy(fogCol);
+      fogLin.setRGB(c[0]*bright, c[1]*bright, c[2]*bright, THREE.SRGBColorSpace);
+      world.envTint.copy(fogLin).multiplyScalar(0.6);
       // the surface overhead
-      const su = surfMat.uniforms; su.uT.value = t; su.uChop.value = 1 + rain*1.6; su.uRain.value = rain;
+      const su = surfMat.uniforms; su.uT.value = t; su.uChop.value = 1 + rain*1.6; su.uRain.value = rain; su.uUpK.value = lerp(0.2, 0.85, Math.exp(-d/90))*(0.3 + 0.7*dayL)*(1 - 0.4*silty);
       _cc.setRGB(0.55, 0.78, 0.95).multiplyScalar(3.2*Math.max(env.day, 0.025)*(1 - 0.55*rain)); su.uSky.value.copy(_cc);
-      su.uHor.value.copy(_cc).multiplyScalar(0.55).lerp(fogCol, 0.3); su.uDeep.value.copy(fogCol).multiplyScalar(0.9);
+      su.uHor.value.copy(_cc).multiplyScalar(0.55).lerp(fogLin, 0.3); su.uDeep.value.copy(fogLin).multiplyScalar(0.9);
       su.uSun.value.copy(VU.uSunDir.value); su.uSunC.value.setRGB(1, 0.92, 0.8).multiplyScalar(env.day*(1 - rain)*2.5);
       surface.position.set(Math.round(S.pos.x/50)*50, 0, Math.round(S.pos.z/50)*50); body.position.copy(S.pos);
       // caustics and shafts
       DEEP_U.uDCaus.value.set(1.0, 0.97, 0.88, 2.6*env.day*(1 - 0.65*rain)*(1 - 0.85*silty));
-      shaftMat.uniforms.uInt.value = 0.28*smoothstep(0.03, 0.3, S.sun[1])*(1 - 0.85*rain)*(1 - 0.9*silty)*(1 - smoothstep(25, 90, d));
+      shaftMat.uniforms.uInt.value = 0.3*smoothstep(-0.03, 0.24, S.sun[1])*(1 - 0.85*rain)*(1 - 0.9*silty)*(1 - smoothstep(25, 90, d));   // refraction keeps the beams steep even under a low sun
+      // grade: glow carries the frame as daylight fades with depth (plankton, lanternfish, the vents)
+      { const dk = smoothstep(50, 320, d), ak = smoothstep(0, 35, d)*(1 - dk); world.post.bloom = (0.6 + 0.35*dk)*(1 - 0.45*env.night); world.post.thresh = 0.78 - 0.22*dk;   // the grade already lifts bloom by night world.post.contrast = 0.16 - 0.08*dk;
+        tintV[0] = 1 - 0.13*ak; tintV[1] = 1; tintV[2] = 1 + 0.04*ak; world.post.tint = tintV; }   // even near things lose red through the water
       // diver's lamp: on in the deep, at night, in caverns and silt
       st.inCave = st.sideIn.some(Boolean);
       const wantLamp = Math.max(smoothstep(45, 90, d), env.night*0.9, st.inCave ? 1 : 0, siltNear > 0.3 ? 0.7 : 0, silty*0.6);
       st.lampK += (wantLamp - st.lampK)*Math.min(1, dt*2);
       const cp = Math.cos(S.pitch); lamp.position.copy(camera.position).add(V3(0, -0.25, 0)); lamp.target.position.set(S.pos.x + Math.sin(S.yaw)*cp*10, S.pos.y + Math.sin(S.pitch)*10, S.pos.z - Math.cos(S.yaw)*cp*10);
-      lamp.intensity = 420*st.lampK;
+      lamp.intensity = 340*st.lampK;
       // vents: plume, glow lights on the two nearest, eruption bursts
       st.ventBurst = Math.max(0, st.ventBurst - dt*0.12);
       plume.userData.tick(t); plume.material.uniforms.uGlowK.value = 0.35 + st.ventBurst*3; plume.material.uniforms.uRise.value = 36 + st.ventBurst*50;
@@ -7245,11 +7375,20 @@ Helios.registerBiome({
       school.forEach((sc, si) => { sc.a += sc.w*dt; sc.px = sc.cx + Math.cos(sc.a)*sc.rad; sc.pz = sc.cz + Math.sin(sc.a)*sc.rad*0.7; sc.py = sc.cy + 3*Math.sin(t*0.13 + si);
         const dS = Math.hypot(sc.px - S.pos.x, sc.py - S.pos.y, sc.pz - S.pos.z); if (dS < 9 + sw*1.5){ sc.panic.set(sc.px - S.pos.x, (sc.py - S.pos.y)*0.3, sc.pz - S.pos.z).normalize().multiplyScalar(5); }
         sc.panic.multiplyScalar(Math.exp(-dt*0.5)); });
-      fish.forEach((f, i) => { const sc = school[f.si], ca = Math.cos(sc.a*2 + f.ph), sa = Math.sin(sc.a*2 + f.ph);
-        const tx = sc.px + f.ox*ca - f.oz*sa + sc.panic.x*3, ty = sc.py + f.oy + sc.panic.y*2, tz = sc.pz + f.ox*sa + f.oz*ca + sc.panic.z*3;
-        const ax = (tx - f.x)*0.9 - f.vx*0.9 + sc.panic.x*2, ay = (ty - f.y)*0.9 - f.vy*0.9, az = (tz - f.z)*0.9 - f.vz*0.9 + sc.panic.z*2;
-        f.vx += ax*dt; f.vy += ay*dt; f.vz += az*dt; const spd = Math.hypot(f.vx, f.vy, f.vz), mx = 3 + sc.panic.length()*1.6; if (spd > mx){ f.vx *= mx/spd; f.vy *= mx/spd; f.vz *= mx/spd; }
-        f.x += f.vx*dt; f.y += f.vy*dt; f.z += f.vz*dt; const fl2 = heightAt(f.x, f.z) + 0.8; if (f.y < fl2) f.y = fl2; if (f.y > -0.8) f.y = -0.8;
+      // boids inside each school: separation, alignment and cohesion, plus a pull toward the school's wandering centre
+      for (const a of sAcc){ a.x = a.y = a.z = a.vx = a.vy = a.vz = 0; }
+      for (const f of fish){ const a = sAcc[f.si]; a.x += f.x; a.y += f.y; a.z += f.z; a.vx += f.vx; a.vy += f.vy; a.vz += f.vz; }
+      const fdt = Math.min(dt, 0.05);
+      fish.forEach((f, i) => { const sc = school[f.si], a = sAcc[f.si], j0 = f.si*40, pk = sc.panic.length();
+        let sx = 0, sy = 0, sz = 0;
+        for (let j=j0;j<j0+40;j++){ if (j === i) continue; const o = fish[j], dx = f.x - o.x, dy = f.y - o.y, dz = f.z - o.z, d2 = dx*dx + dy*dy + dz*dz; if (d2 < 0.81){ const k = (0.81 - d2)/(d2 + 0.04); sx += dx*k; sy += dy*k; sz += dz*k; } }
+        const w1 = Math.sin(t*1.3 + f.ph*7), w2 = Math.cos(t*0.9 + f.ph*5);
+        const ax = sx*1.4 + (a.vx/40 - f.vx)*0.9 + (a.x/40 - f.x)*0.22 + (sc.px - f.x)*0.14 + sc.panic.x*2.5 + w1*0.5;
+        const ay = (sy*1.4 + (a.vy/40 - f.vy)*0.9 + (a.y/40 - f.y)*0.22 + (sc.py - f.y)*0.2 + sc.panic.y*2)*0.7 - f.vy*0.6;
+        const az = sz*1.4 + (a.vz/40 - f.vz)*0.9 + (a.z/40 - f.z)*0.22 + (sc.pz - f.z)*0.14 + sc.panic.z*2.5 + w2*0.5;
+        f.vx += ax*fdt; f.vy += ay*fdt; f.vz += az*fdt;
+        const spd = Math.hypot(f.vx, f.vy, f.vz), mx = 2.6 + pk*1.6, mn = 0.9; if (spd > mx){ f.vx *= mx/spd; f.vy *= mx/spd; f.vz *= mx/spd; } else if (spd < mn && spd > 1e-4){ f.vx *= mn/spd; f.vy *= mn/spd; f.vz *= mn/spd; }
+        f.x += f.vx*dt; f.y += f.vy*dt; f.z += f.vz*dt; const fl2 = heightAt(f.x, f.z) + 0.8; if (f.y < fl2){ f.y = fl2; f.vy = Math.abs(f.vy); } if (f.y > -0.8){ f.y = -0.8; f.vy = -Math.abs(f.vy); }
         dm.position.set(f.x, f.y, f.z); dm.rotation.set(-Math.atan2(f.vy, Math.hypot(f.vx, f.vz) + 1e-3)*0.6, Math.atan2(f.vx, f.vz), 0, 'YXZ'); dm.rotation.order = 'YXZ'; dm.scale.setScalar(f.s); dm.updateMatrix(); fishM.setMatrixAt(i, dm.matrix); });
       dm.rotation.order = 'XYZ'; fishM.instanceMatrix.needsUpdate = true;
       lant.forEach((f, i) => { const th = f.a + f.w*t; dm.position.set(f.cx + Math.cos(th)*f.rad, f.y + 2*Math.sin(t*0.4 + i), f.cz + Math.sin(th)*f.rad); dm.rotation.set(0, -th + (f.w > 0 ? 0 : Math.PI), 0); dm.scale.setScalar(0.35); dm.updateMatrix(); lantM.setMatrixAt(i, dm.matrix); });
