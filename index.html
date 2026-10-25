@@ -146,9 +146,9 @@ const hemi = new THREE.HemisphereLight(0xbfd4ff, 0x3a3020, 0.3); scene.add(hemi)
 /* ---------- Quality ---------- */
 const DPR = devicePixelRatio || 1;
 const QUALITY = {
-  fast:     { label:'Fast',     pr:Math.min(DPR,1.75), shadow:1024, ext:110, density:0.35, water:0,    seg:0.55, puffs:4, cards:60,  lod:85,  leafShadow:false, cardK:0.6,  impRes:192, cloud:18 },
-  balanced: { label:'Balanced', pr:Math.min(DPR,2),    shadow:2048, ext:170, density:0.75, water:1024, seg:0.8,  puffs:6, cards:90,  lod:150, leafShadow:true,  cardK:0.85, impRes:320, cloud:28 },
-  ultra:    { label:'Ultra',    pr:Math.min(DPR,2.5),  shadow:4096, ext:230, density:1.0,  water:2048, seg:1.0,  puffs:7, cards:130, lod:240, leafShadow:true,  cardK:1.0,  impRes:448, cloud:40 }
+  fast:     { label:'Fast',     pr:Math.min(DPR,1.75), shadow:1024, ext:110, density:0.35, water:0,    seg:0.55, puffs:4, cards:60,  lod:85,  leafShadow:false, cardK:0.6,  impRes:192, cloud:18, msaa:0, ao:0,  shafts:16 },
+  balanced: { label:'Balanced', pr:Math.min(DPR,2),    shadow:2048, ext:170, density:0.75, water:1024, seg:0.8,  puffs:6, cards:90,  lod:150, leafShadow:true,  cardK:0.85, impRes:320, cloud:28, msaa:4, ao:8,  shafts:32 },
+  ultra:    { label:'Ultra',    pr:Math.min(DPR,2.5),  shadow:4096, ext:230, density:1.0,  water:2048, seg:1.0,  puffs:7, cards:130, lod:240, leafShadow:true,  cardK:1.0,  impRes:448, cloud:40, msaa:4, ao:14, shafts:48 }
 };
 let qKey = matchMedia('(pointer:coarse)').matches ? 'fast' : 'balanced';
 let Q = QUALITY[qKey];
@@ -162,7 +162,9 @@ function resize(){
   renderer.setPixelRatio(Q.pr);
   renderer.setSize(innerWidth, innerHeight, false);
   camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  postResize?.();
 }
+let postResize = null;
 addEventListener('resize', resize);
 
 /* ---------- Procedural textures ---------- */
@@ -10169,7 +10171,7 @@ window.__helios = { load: id => loadBiome(id), S, TOD, WX, setQuality: k => { qK
   status(){ return [active.status?.(S.lastEnv), surfaceStatus()].filter(Boolean).join(' · '); },
   relight(){ envDirty = true; envTimer = 0; },
   snap(steps=3){ for (let i=0;i<steps;i++){ last -= 1000/30; frame(last + 1000/30, true); } return canvas.toDataURL('image/jpeg', 0.92); },
-  stats(){ return renderer.info.render; },
+  stats(){ return PP.info; }, post(o){ activeDef.post = { ...(activeDef.post || {}), ...o }; },
   flocks(){ return FLOCKS.map(f => { const A = f.agents, n = A.length, m = [0,0,0], v = A.reduce((s, a) => s + Math.hypot(a.vx, a.vy, a.vz), 0)/n; for (const a of A){ m[0] += a.x/n; m[1] += a.y/n; m[2] += a.z/n; }
     const gy = {}; for (const a of A){ (gy[a.g] ??= []).push(a.y); }
     return { n, groupY:Object.values(gy).map(v => Math.round(v.reduce((s, y) => s + y, 0)/v.length*10)/10), mean:m.map(Math.round), speed:+v.toFixed(1), spread:Math.round(Math.sqrt(A.reduce((s, a) => s + (a.x - m[0])**2 + (a.z - m[2])**2, 0)/n)), finite:A.every(a => isFinite(a.x + a.y + a.z)) }; }); } };
@@ -10336,6 +10338,185 @@ stick.addEventListener('pointermove', e => { if (stick.hasPointerCapture(e.point
 stick.addEventListener('pointerup', () => { S.stick=[0,0]; knob.style.transform=''; });
 function moveStick(e){ const r=stick.getBoundingClientRect(); let x=(e.clientX-r.left-48)/40, y=(e.clientY-r.top-48)/40; const m=Math.hypot(x,y); if (m>1){ x/=m; y/=m; } S.stick=[x,-y]; knob.style.transform=`translate(${x*30}px,${y*30}px)`; }
 
+/* ============================== POST ============================== */
+/* The scene renders into a half-float target that three treats like the screen (flagged as an XR target, so every
+   material still tone-maps and encodes sRGB exactly as before and the worlds keep their tuned look), with additive
+   light allowed past 1. Then: depth-aware ambient occlusion (from the logarithmic depth buffer), a dual-filter bloom,
+   sun shafts marched from the unoccluded sky, a grade (white balance, saturation, filmic contrast, soft shoulder),
+   vignette, slight edge fringing, FXAA when there is no MSAA, and a blue-noise dither that hides gradient banding.
+   A world tunes it with def.post or a live active.post: { bloom, thresh, shafts, ao, aoR, sat, contrast, warm, vig, tint:[r,g,b] } */
+const POST_DEFAULT = { bloom:0.5, thresh:0.88, shafts:0.3, ao:0.62, aoR:1.6, sat:1.08, contrast:0.35, warm:0, vig:0.26, tint:null, fringe:0.006, debug:0 };
+const PP = (() => {
+  const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2)), sc = new THREE.Scene();
+  quad.frustumCulled = false; sc.add(quad);
+  const VS = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
+  const mat = (fs, uniforms, o = {}) => new THREE.ShaderMaterial({ uniforms, vertexShader:VS, fragmentShader:fs, depthTest:false, depthWrite:false, ...o });
+  const LIN = `uniform vec4 uProj; float lin(sampler2D t, vec2 uv){ return exp2(texture2D(t, uv).x*uProj.z) - 1.0; }
+    vec3 vpos(vec2 uv, float w){ return vec3((uv*2.0 - 1.0)*uProj.xy*w, -w); }\n`;
+  const U = { uProj:{ value:new THREE.Vector4() } };
+  const ao = mat(IGN + LIN + `
+    uniform sampler2D tDepth; uniform vec2 uRes; uniform float uRad; uniform int uN; varying vec2 vUv;
+    void main(){
+      float w = lin(tDepth, vUv);
+      float fade = 1.0 - smoothstep(140.0, 520.0, w), rad = uRad*(1.0 + w*0.025);
+      if (w > uProj.w*0.5 || fade <= 0.0){ gl_FragColor = vec4(1.0); return; }
+      vec2 px = 1.0/uRes; vec3 P = vpos(vUv, w);
+      vec3 Pr = vpos(vUv + vec2(px.x, 0.0), lin(tDepth, vUv + vec2(px.x, 0.0))), Pl = vpos(vUv - vec2(px.x, 0.0), lin(tDepth, vUv - vec2(px.x, 0.0)));
+      vec3 Pu = vpos(vUv + vec2(0.0, px.y), lin(tDepth, vUv + vec2(0.0, px.y))), Pd = vpos(vUv - vec2(0.0, px.y), lin(tDepth, vUv - vec2(0.0, px.y)));
+      vec3 dx = abs(Pr.z - P.z) < abs(Pl.z - P.z) ? Pr - P : P - Pl, dy = abs(Pu.z - P.z) < abs(Pd.z - P.z) ? Pu - P : P - Pd;
+      vec3 N = normalize(cross(dx, dy));
+      float rpx = min(rad/(w*uProj.y)*0.5*uRes.y, 90.0);
+      if (rpx < 1.5){ gl_FragColor = vec4(1.0); return; }
+      float a0 = ign(gl_FragCoord.xy)*6.2832, occ = 0.0, r2 = rad*rad;
+      for (int i=0; i<16; i++){ if (i >= uN) break;
+        float t = (float(i) + 0.6)/float(uN), a = a0 + float(i)*2.39996;
+        vec2 su = vUv + vec2(cos(a), sin(a))*t*rpx*px;
+        vec3 v = vpos(su, lin(tDepth, su)) - P; float vv = dot(v, v);
+        occ += max(0.0, dot(v, N)*inversesqrt(vv + 1e-4) - 0.22 - 0.002*w) * clamp(1.0 - vv/(r2*1.6), 0.0, 1.0);
+      }
+      gl_FragColor = vec4(vec3(1.0 - clamp(occ/float(uN)*2.6, 0.0, 1.0)*fade), 1.0);
+    }`, { ...U, tDepth:{ value:null }, uRes:{ value:new THREE.Vector2() }, uRad:{ value:1.6 }, uN:{ value:8 } });
+  const aoBlur = mat(LIN + `
+    uniform sampler2D tAO, tDepth; uniform vec2 uRes; varying vec2 vUv;
+    void main(){ float w0 = lin(tDepth, vUv), s = 0.0, ws = 0.0;
+      for (int y=-2; y<2; y++) for (int x=-2; x<2; x++){ vec2 uv = vUv + (vec2(float(x), float(y)) + 0.5)/uRes;
+        float k = 1.0/(1.0 + abs(lin(tDepth, uv) - w0)/(0.02*w0 + 0.05)*4.0); s += texture2D(tAO, uv).r*k; ws += k; }
+      gl_FragColor = vec4(vec3(s/ws), 1.0); }`, { ...U, tAO:{ value:null }, tDepth:{ value:null }, uRes:{ value:new THREE.Vector2() } });
+  // bloom: soft-knee prefilter, then a dual-filter (Kawase) pyramid down and back up
+  // the open sky blooms only at the sun's disc, so a bright sky does not haze over its own clouds
+  const pre = mat(LIN + `uniform sampler2D tSrc, tDepth; uniform vec2 uTex; uniform float uThr; varying vec2 vUv;
+    void main(){ vec3 c = (texture2D(tSrc, vUv + uTex*vec2(-1,-1)).rgb + texture2D(tSrc, vUv + uTex*vec2(1,-1)).rgb + texture2D(tSrc, vUv + uTex*vec2(-1,1)).rgb + texture2D(tSrc, vUv + uTex*vec2(1,1)).rgb)*0.25;
+      float thr = lin(tDepth, vUv) > uProj.w*0.5 ? max(uThr, 0.993) : uThr;
+      c = min(c, vec3(6.0)); float L = max(c.r, max(c.g, c.b)), k = 0.08, s = clamp(L - thr + k, 0.0, 2.0*k); s = s*s/(4.0*k + 1e-4);
+      gl_FragColor = vec4(c*max(s, L - thr)/max(L, 1e-4), 1.0); }`, { ...U, tSrc:{ value:null }, tDepth:{ value:null }, uTex:{ value:new THREE.Vector2() }, uThr:{ value:0.82 } });
+  const down = mat(`uniform sampler2D tSrc; uniform vec2 uTex; varying vec2 vUv;
+    void main(){ vec3 c = texture2D(tSrc, vUv).rgb*4.0 + texture2D(tSrc, vUv - uTex).rgb + texture2D(tSrc, vUv + uTex).rgb
+      + texture2D(tSrc, vUv + vec2(uTex.x, -uTex.y)).rgb + texture2D(tSrc, vUv - vec2(uTex.x, -uTex.y)).rgb; gl_FragColor = vec4(c/8.0, 1.0); }`, { tSrc:{ value:null }, uTex:{ value:new THREE.Vector2() } });
+  const up = mat(`uniform sampler2D tSrc; uniform vec2 uTex; uniform float uK; varying vec2 vUv;
+    void main(){ vec2 h = uTex*0.5; vec3 c = texture2D(tSrc, vUv + vec2(-h.x*2.0, 0.0)).rgb + texture2D(tSrc, vUv + vec2(-h.x, h.y)).rgb*2.0
+      + texture2D(tSrc, vUv + vec2(0.0, h.y*2.0)).rgb + texture2D(tSrc, vUv + vec2(h.x, h.y)).rgb*2.0 + texture2D(tSrc, vUv + vec2(h.x*2.0, 0.0)).rgb
+      + texture2D(tSrc, vUv + vec2(h.x, -h.y)).rgb*2.0 + texture2D(tSrc, vUv + vec2(0.0, -h.y*2.0)).rgb + texture2D(tSrc, vUv + vec2(-h.x, -h.y)).rgb*2.0;
+      gl_FragColor = vec4(c/12.0*uK, 1.0); }`, { tSrc:{ value:null }, uTex:{ value:new THREE.Vector2() }, uK:{ value:1 } }, { blending:THREE.AdditiveBlending });
+  // sun shafts: bright, unoccluded sky (depth at the far plane) marched toward the sun's screen position
+  const smask = mat(LIN + `uniform sampler2D tSrc, tDepth; uniform vec2 uSun; uniform float uAsp; varying vec2 vUv;
+    void main(){ float sky = step(uProj.w*0.5, lin(tDepth, vUv)); vec3 c = texture2D(tSrc, vUv).rgb;
+      float L = dot(c, vec3(0.3, 0.55, 0.15)), d = length((vUv - uSun)*vec2(uAsp, 1.0));
+      gl_FragColor = vec4(c*sky*smoothstep(0.8, 1.0, L)*exp(-d*d*22.0), 1.0); }`, { ...U, tSrc:{ value:null }, tDepth:{ value:null }, uSun:{ value:new THREE.Vector2() }, uAsp:{ value:1 } });
+  const shaft = mat(IGN + `uniform sampler2D tSrc; uniform vec2 uSun; uniform int uN; varying vec2 vUv;
+    void main(){ vec2 d = (uSun - vUv)/float(uN)*0.92; vec2 uv = vUv + d*ign(gl_FragCoord.xy); float decay = 1.0; vec3 s = vec3(0.0);
+      for (int i=0; i<64; i++){ if (i >= uN) break; s += texture2D(tSrc, uv).rgb*decay; decay *= 0.965; uv += d; }
+      gl_FragColor = vec4(s/float(uN)*1.6, 1.0); }`, { tSrc:{ value:null }, uSun:{ value:new THREE.Vector2() }, uN:{ value:32 } });
+  const comp = mat(IGN + `
+    uniform sampler2D tScene, tAO, tBloom, tShaft; uniform vec2 uRes; uniform float uTime, uBloom, uAO, uSat, uCon, uVig, uFringe, uFxaa, uShaftK, uDbg;
+    uniform vec3 uShaftC, uGain; varying vec2 vUv;
+    vec3 fxaa(vec2 uv){
+      vec2 px = 1.0/uRes; vec3 c = texture2D(tScene, uv).rgb; if (uFxaa < 0.5) return c;
+      vec3 LW = vec3(0.299, 0.587, 0.114); float lM = dot(c, LW);
+      float lNW = dot(texture2D(tScene, uv + vec2(-1.0, 1.0)*px).rgb, LW), lNE = dot(texture2D(tScene, uv + vec2(1.0, 1.0)*px).rgb, LW);
+      float lSW = dot(texture2D(tScene, uv + vec2(-1.0, -1.0)*px).rgb, LW), lSE = dot(texture2D(tScene, uv + vec2(1.0, -1.0)*px).rgb, LW);
+      float mn = min(lM, min(min(lNW, lNE), min(lSW, lSE))), mx = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+      if (mx - mn < max(0.04, mx*0.12)) return c;
+      vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)), (lNW + lSW) - (lNE + lSE));
+      float rd = 1.0/(min(abs(dir.x), abs(dir.y)) + max((lNW + lNE + lSW + lSE)*0.03125, 0.0078));
+      dir = clamp(dir*rd, -8.0, 8.0)*px;
+      vec3 a = 0.5*(texture2D(tScene, uv - dir*0.1667).rgb + texture2D(tScene, uv + dir*0.1667).rgb);
+      vec3 b = a*0.5 + 0.25*(texture2D(tScene, uv - dir*0.5).rgb + texture2D(tScene, uv + dir*0.5).rgb);
+      float lb = dot(b, LW); return (lb < mn || lb > mx) ? a : b;
+    }
+    vec3 shoulder(vec3 x){ vec3 o = x - 0.8; return mix(x, 0.8 + 0.2*(1.0 - exp(-o/0.2)), step(0.8, x)); }
+    void main(){
+      vec2 q = vUv - 0.5; float r2 = dot(q, q);
+      vec3 c = fxaa(vUv);
+      if (uFringe > 0.0){ vec2 o = q*r2*uFringe; c.r = mix(c.r, texture2D(tScene, vUv - o).r, 0.85); c.b = mix(c.b, texture2D(tScene, vUv + o).b, 0.85); }
+      c *= mix(1.0, texture2D(tAO, vUv).r, uAO);
+      c += texture2D(tBloom, vUv).rgb*uBloom + texture2D(tShaft, vUv).rgb*uShaftC*uShaftK;
+      c = shoulder(max(c, 0.0))*uGain;
+      float L = dot(c, vec3(0.2126, 0.7152, 0.0722));
+      c = max(mix(vec3(L), c, uSat), 0.0);
+      c += uCon*(c*c*(3.0 - 2.0*c) - c)*(1.0 - smoothstep(0.4, 0.75, c));   // deepen the shadows, leave the highlights
+      c *= mix(1.0, smoothstep(0.85, 0.18, r2*2.2), uVig);
+      c += (ign(gl_FragCoord.xy + fract(uTime*7.31)*vec2(91.0, 37.0)) - 0.5)*(2.2/255.0);
+      if (uDbg > 0.5) c = uDbg < 1.5 ? texture2D(tBloom, vUv).rgb*uBloom : uDbg < 2.5 ? texture2D(tAO, vUv).rrr : texture2D(tShaft, vUv).rgb*uShaftK;
+      gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    }`, { tScene:{ value:null }, tAO:{ value:null }, tBloom:{ value:null }, tShaft:{ value:null }, uRes:{ value:new THREE.Vector2() }, uTime:{ value:0 },
+      uBloom:{ value:0.3 }, uAO:{ value:0.6 }, uSat:{ value:1 }, uCon:{ value:0.2 }, uVig:{ value:0.3 }, uFringe:{ value:0 }, uFxaa:{ value:0 }, uShaftK:{ value:0 }, uDbg:{ value:0 },
+      uShaftC:{ value:new THREE.Color() }, uGain:{ value:new THREE.Color(1, 1, 1) } });
+  const white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1); white.needsUpdate = true;
+  const black = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); black.needsUpdate = true;
+  const T = { main:null, ao:null, aoB:null, bl:[], sm:null, sh:null, w:0, h:0, msaa:-1 };
+  const rtOf = (w, h, o = {}) => { const t = new THREE.WebGLRenderTarget(Math.max(1, w), Math.max(1, h), { type:THREE.HalfFloatType, depthBuffer:false, ...o });
+    t.texture.generateMipmaps = false; t.texture.minFilter = t.texture.magFilter = THREE.LinearFilter; return t; };
+  function size(){
+    const v = renderer.getDrawingBufferSize(new THREE.Vector2()), w = v.x, h = v.y;
+    if (w === T.w && h === T.h && Q.msaa === T.msaa) return;
+    for (const t of [T.main, T.ao, T.aoB, T.sm, T.sh, ...T.bl]) t?.dispose();
+    T.w = w; T.h = h; T.msaa = Q.msaa;
+    T.main = new THREE.WebGLRenderTarget(w, h, { type:THREE.HalfFloatType, samples:Q.msaa, depthTexture:new THREE.DepthTexture(w, h, THREE.FloatType) });
+    T.main.texture.colorSpace = THREE.SRGBColorSpace; T.main.isXRRenderTarget = true;   // three then tone-maps and encodes as for the canvas
+    T.main.texture.generateMipmaps = false;
+    T.ao = rtOf(w >> 1, h >> 1, { type:THREE.UnsignedByteType }); T.aoB = rtOf(w >> 1, h >> 1, { type:THREE.UnsignedByteType });
+    T.bl = []; for (let i=0, bw = w >> 1, bh = h >> 1; i<6 && bw >= 8 && bh >= 8; i++, bw >>= 1, bh >>= 1) T.bl.push(rtOf(bw, bh));
+    T.sm = rtOf(w >> 2, h >> 2); T.sh = rtOf(w >> 2, h >> 2);
+  }
+  const pass = (m, target, clear = true) => { quad.material = m; renderer.setRenderTarget(target); if (clear) renderer.clear(true, false, false); renderer.render(sc, cam); };
+  const _p = new THREE.Vector3(), _f = new THREE.Vector3(), P = { ...POST_DEFAULT }, info = { triangles:0, calls:0, points:0, lines:0 };
+  function render(env){
+    size();
+    const def = activeDef.post || {}, live = active.post || {};
+    for (const k in POST_DEFAULT) P[k] = live[k] ?? def[k] ?? POST_DEFAULT[k];
+    renderer.setRenderTarget(T.main); renderer.render(scene, camera);
+    Object.assign(info, renderer.info.render);
+    const prevAC = renderer.autoClear; renderer.autoClear = false;
+    const dT = T.main.depthTexture, far = camera.far;
+    U.uProj.value.set(1/camera.projectionMatrix.elements[0], 1/camera.projectionMatrix.elements[5], Math.log2(far + 1), far);
+    // ambient occlusion
+    const aoOn = Q.ao > 0 && P.ao > 0;
+    if (aoOn){
+      ao.uniforms.tDepth.value = dT; ao.uniforms.uRes.value.set(T.ao.width, T.ao.height); ao.uniforms.uRad.value = P.aoR; ao.uniforms.uN.value = Q.ao;
+      pass(ao, T.ao);
+      aoBlur.uniforms.tAO.value = T.ao.texture; aoBlur.uniforms.tDepth.value = dT; aoBlur.uniforms.uRes.value.set(T.ao.width, T.ao.height);
+      pass(aoBlur, T.aoB);
+    }
+    // bloom: stronger at night, when lamps, lava and windows carry the frame
+    const B = T.bl, bloomK = P.bloom*(1 + 1.4*(env?.night ?? 0));
+    if (bloomK > 0 && B.length){
+      pre.uniforms.tSrc.value = T.main.texture; pre.uniforms.tDepth.value = dT; pre.uniforms.uTex.value.set(0.5/T.w, 0.5/T.h); pre.uniforms.uThr.value = P.thresh*(1 - 0.3*(env?.night ?? 0));
+      pass(pre, B[0]);
+      for (let i=1;i<B.length;i++){ down.uniforms.tSrc.value = B[i-1].texture; down.uniforms.uTex.value.set(1/B[i-1].width, 1/B[i-1].height); pass(down, B[i]); }
+      for (let i=B.length-1;i>0;i--){ up.uniforms.tSrc.value = B[i].texture; up.uniforms.uTex.value.set(1/B[i].width, 1/B[i].height); up.uniforms.uK.value = 0.8; pass(up, B[i-1], false); }
+    }
+    // sun shafts, strongest with a low sun in front of the viewer; worlds without open sky turn them off
+    let shK = 0;
+    if (P.shafts > 0 && env){
+      const sd = VU.uSunDir.value; camera.getWorldDirection(_f);
+      const facing = smoothstep(-0.1, 0.55, _f.dot(sd)), low = 0.45 + 0.55*(1 - smoothstep(0.15, 0.7, sd.y));
+      shK = P.shafts*facing*low*env.day*(1 - env.rain*0.8)*(1 - smoothstep(1.5, 4.5, env.fog)*0.7)*(active.lightK ?? 1);
+      if (shK > 0.01){
+        _p.copy(camera.position).addScaledVector(sd, 1000).project(camera);
+        const su = smask.uniforms.uSun.value.set(_p.x*0.5 + 0.5, _p.y*0.5 + 0.5);
+        smask.uniforms.tSrc.value = T.main.texture; smask.uniforms.tDepth.value = dT; smask.uniforms.uAsp.value = T.w/T.h;
+        pass(smask, T.sm);
+        shaft.uniforms.tSrc.value = T.sm.texture; shaft.uniforms.uSun.value.copy(su); shaft.uniforms.uN.value = Q.shafts;
+        pass(shaft, T.sh);
+      }
+    }
+    // composite and grade, straight to the canvas
+    const cu = comp.uniforms;
+    cu.tScene.value = T.main.texture; cu.tAO.value = aoOn ? T.aoB.texture : white; cu.tBloom.value = bloomK > 0 && B.length ? B[0].texture : black;
+    cu.tShaft.value = shK > 0.01 ? T.sh.texture : black; cu.uShaftK.value = shK; cu.uShaftC.value.copy(sun.color).lerp(_c.setRGB(1, 0.92, 0.8), 0.4);
+    cu.uRes.value.set(T.w, T.h); cu.uTime.value = S.time; cu.uBloom.value = bloomK; cu.uAO.value = aoOn ? P.ao : 0;
+    cu.uSat.value = P.sat*(1 - 0.22*(env?.night ?? 0))*(1 - 0.15*(env?.rain ?? 0)); cu.uCon.value = P.contrast; cu.uVig.value = P.vig; cu.uFringe.value = P.fringe; cu.uFxaa.value = Q.msaa ? 0 : 1; cu.uDbg.value = P.debug;
+    // white balance: a touch warmer with a low sun, cooler by night; worlds add their own tint
+    const n = env?.night ?? 0, g = 1 - smoothstep(0.08, 0.5, VU.uSunDir.value.y), wk = P.warm + 0.03*g*(env?.day ?? 1) - 0.05*n;
+    cu.uGain.value.setRGB(1 + wk, 1 + wk*0.25, 1 - wk);
+    if (P.tint) cu.uGain.value.multiply(_c.setRGB(...P.tint));
+    pass(comp, null);
+    renderer.autoClear = prevAC;
+  }
+  postResize = () => { if (T.main) size(); };
+  return { render, info, P };
+})();
+
 /* ============================== LOOP ============================== */
 const meta=document.getElementById('meta'), statusEl=document.getElementById('status'); let last=performance.now(), acc=0, frames=0, statusT=0;
 const ease=(rate,dt)=>1-Math.exp(-rate*dt);
@@ -10378,7 +10559,7 @@ function frame(now, forced){
   active.update?.(dt, env);
   surfaceFrame(dt, env);
   if ((statusT -= dt) < 0){ statusT = 0.25; const t = [active.status?.(env), surfaceStatus()].filter(Boolean).join(' · '); if (t !== statusEl.textContent) statusEl.textContent = t; }
-  renderer.render(scene, camera);
+  PP.render(env);
 }
 applyQuality();
 loadBiome(startId);
