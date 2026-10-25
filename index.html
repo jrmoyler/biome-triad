@@ -3124,10 +3124,11 @@ Helios.registerBiome({
         ${NOISE2D}
         void main(){
           #include <logdepthbuf_fragment>
-          float s = tfbm(vec2(vUv.x*9.0, vUv.y*3.5 - uT.x*1.6)) + 0.35*tvn(vec2(vUv.x*30.0, vUv.y*12.0 - uT.x*3.0));
-          float edge = smoothstep(0.0, 0.18, vUv.x)*smoothstep(1.0, 0.82, vUv.x);
-          float a = smoothstep(0.42, 0.85, s)*edge*(1.0 - smoothstep(0.35, 1.0, vUv.y))*0.95 + edge*0.12*(1.0 - vUv.y);
-          vec3 col = vec3(0.85, 0.93, 1.0) * (uSunCol*0.45 + uHemiSky*0.9) * RECIPROCAL_PI * (0.8 + 0.4*s);
+          // long ropes of water (noise stretched down the fall), a glassy lip where it curls over the brink, then mist
+          float s = tfbm(vec2(vUv.x*13.0, vUv.y*2.2 - uT.x*1.8)) + 0.35*tvn(vec2(vUv.x*38.0, vUv.y*9.0 - uT.x*3.4));
+          float edge = smoothstep(0.0, 0.18, vUv.x)*smoothstep(1.0, 0.82, vUv.x), lip = 1.0 - smoothstep(0.0, 0.05, vUv.y);
+          float a = (smoothstep(0.4, 0.82, s)*(1.0 - smoothstep(0.35, 1.0, vUv.y))*0.95 + 0.14*(1.0 - vUv.y) + lip*0.55)*edge;
+          vec3 col = vec3(0.85, 0.93, 1.0) * (uSunCol*0.45 + uHemiSky*0.9) * RECIPROCAL_PI * (0.8 + 0.4*s + 0.35*lip);
           gl_FragColor = vec4(col, a);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
