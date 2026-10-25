@@ -57,6 +57,7 @@ for (const j of jobs){
     if (j.tod || j.wx) H.relight?.();   // re-bake the sky light for the new sun/weather
     if (j.cam){ const [x,y,z,yaw,pitch] = j.cam; H.S.pos.set(x,y,z); H.S.tPos.set(x,y,z); H.S.yaw = H.S.tYaw = yaw; H.S.pitch = H.S.tPitch = pitch; }
     if (j.opt) H.option(...j.opt);
+    H.post(null); // Each job starts without overrides, even when it reuses the current biome.
     if (j.post) H.post(j.post);
     for (const [el, x, z, r, k] of j.strike || []) H.strike(el, x, z, r, k);
     if (j.sim) H.sim(j.sim);
