@@ -5,7 +5,7 @@
 //   job: { "biome":"amazon|sea|egypt|arctic|volcano|haven|forest|taiga|savanna|canyon|alpine|marsh|underwater|caverns|village|ruins|urban",
 //          "q":"fast|balanced|ultra",
 //          "tod":"dawn|noon|dusk|night", "wx":"clear|rain|fog", "cam":[x, y, z, yaw, pitch], "steps":3,
-//          "opt":["season","autumn"], "strike":[["fire", x, z, radius?], ...], "sim":seconds }
+//          "opt":["season","autumn"], "post":{"bloom":0.4}, "strike":[["fire", x, z, radius?], ...], "sim":seconds }
 //   strike hits the surface layer; sim advances weather, surface and wildlife without rendering (after cam/strike).
 //
 // Example:
@@ -57,6 +57,7 @@ for (const j of jobs){
     if (j.tod || j.wx) H.relight?.();   // re-bake the sky light for the new sun/weather
     if (j.cam){ const [x,y,z,yaw,pitch] = j.cam; H.S.pos.set(x,y,z); H.S.tPos.set(x,y,z); H.S.yaw = H.S.tYaw = yaw; H.S.pitch = H.S.tPitch = pitch; }
     if (j.opt) H.option(...j.opt);
+    if (j.post) H.post(j.post);
     for (const [el, x, z, r, k] of j.strike || []) H.strike(el, x, z, r, k);
     if (j.sim) H.sim(j.sim);
     return H.snap(j.steps || 3);
