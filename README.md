@@ -97,6 +97,12 @@ All code lives in `index.html`, grouped into these sections:
 - **Renderer:** WebGL2 with MSAA, a logarithmic depth buffer (no z-fighting from 0.5 m to 16 km),
   ACES filmic tone mapping, PCF soft shadows on a texel-snapped shadow camera that follows the viewer,
   and a physical sky (`Sky.js`) that also feeds image-based lighting through PMREM.
+- **Post:** the scene renders into a half-float target that three treats like the canvas, so every material keeps its
+  tone mapping and sRGB output. On top run depth-aware ambient occlusion reconstructed from the logarithmic depth
+  buffer (Balanced and Ultra), a dual-filter bloom (the open sky blooms only at the sun's disc), sun shafts marched
+  from the unoccluded sky, a grade (white balance by sun height, saturation, a shadow-only contrast curve), vignette,
+  slight edge fringing, FXAA at Fast, and a dither against banding. A world tunes it with `post:{ bloom, thresh,
+  shafts, ao, aoR, sat, contrast, warm, vig, tint }` in its definition, or live with `active.post`.
 - **Atmosphere:** sun and moon lighting, exponential fog tinted per biome, stars, rain streaks, lightning and
   shared wind uniforms. Clouds are volumetric: a raymarched cumulus slab (3D noise, sun-marched self shadowing,
   dual-lobe phase function, powder term) plus a cirrus deck, drawn on a sky dome. Each biome sets its own
@@ -398,7 +404,8 @@ node shot.mjs ../../index.html out/check \
 Each job saves a JPEG and prints the triangle count and draw calls. A job accepts `biome`, `q`, `tod`,
 `wx` (`clear`, `rain`, `fog`), `cam` (`[x, y, z, yaw, pitch]`), `opt` (`["season", "winter"]`), `strike`
 (`[["fire", x, z, radius, intensity], ...]`), `sim` (seconds of weather, surface and wildlife to advance before the
-frame) and `steps`. The engine exposes `window.__helios` (`load`, `setQuality`, `snap`, `stats`, `sim`, `strike`,
+frame), `post` (merged into the world's post settings; `{"debug":1}`, `2` or `3` shows the bloom, AO or shaft
+buffer) and `steps`. The engine exposes `window.__helios` (`load`, `setQuality`, `snap`, `stats`, `post`, `sim`, `strike`,
 `option`, `status`) only for this harness. `PORT` sets the harness server port.
 
 The surface package has its own tests: `cd extensions/surface-state && npm test` (Node 18+).
@@ -419,9 +426,10 @@ legacy/                        The original GLSL ES 3.00 raymarched version this
   counts only. At Balanced the Amazon runs about 1.3 to 2.4 million triangles and Egypt about 0.5 to 1.7 million,
   depending on the view. Ground cover density and radius scale with the Fast, Balanced and Ultra levels.
 - The volumetric clouds are the most expensive screen-space pass (14, 28 and 40 march steps per quality level).
-  Far cloud detail is dropped past a fixed distance, and cloud edges can show faint dither banding.
-- Egypt's interior chambers and hieroglyph colour are not modelled; the pylon glyphs are procedural marks, not real
-  text, and the Sphinx's face is a simplified block.
+  Far cloud detail is dropped past a fixed distance. The post stack adds about a dozen full-screen passes at reduced
+  resolution; like everything else it was only measured in software.
+- Egypt's interior chambers are not modelled; the pylon glyphs are procedural painted marks, not real text, and the
+  colossi have no faces. Noon still reads hazy, as in most open worlds under a high sun.
 - The Volcanic and Haven worlds add point lights, extra transparent passes (plume, waterfalls, light beams) and a
   second reflection on the Haven pool at Balanced and Ultra; like the rest, they were only measured in software
   (about 0.6 to 1.5 million triangles at Balanced).
@@ -444,9 +452,8 @@ legacy/                        The original GLSL ES 3.00 raymarched version this
   change of eye height. Herons, dragonflies and wisps follow simple CPU rules.
 - The Underwater world's zone depths are compressed (sunlit to 60 m, twilight to 200 m, midnight to 450 m, abyssal
   below) so all four fit in a 650 m trench; pressure is computed from the real depth. Swimming collides with the
-  seabed, cavern domes and the surface only; ruins, kelp and coral can be swum through. Fish schools steer toward a
-  wandering centre rather than flocking, and the vent plumes are only lit by their own glow. The trench floor under
-  the vent lights shows the terrain's value-noise bump faintly as a grid.
+  seabed, cavern domes and the surface only; ruins, kelp and coral can be swum through. Fish schools flock around a
+  wandering centre, and the vent plumes are only lit by their own glow.
 - The Caverns floor and roof are one height field each, so passages cannot cross over one another and overhanging
   walls are limited to the roof's own slope; walls are faceted at the grid (2.5 m at Balanced).
 - Cave sounds (reverb, drips, river) could not be listened to in the headless harness; only the chamber-size and
@@ -461,10 +468,9 @@ legacy/                        The original GLSL ES 3.00 raymarched version this
 - The Ruins' falling stones collide with the ground and the built surfaces but not with each other, so rubble piles can
   interpenetrate; drums are treated as boxes when they land and do not roll.
 - Walls only block movement in the Ruins' underground passages; above ground the viewer still passes through masonry.
-- Restored buildings are simple painted volumes (no interiors, carved facades or stucco masks), and the restored and
-  excavated stone has no normal map, so it reads flat at noon.
-- The Urban world's facades are boxes with shader-drawn windows: there are no interiors, balconies or sills, and the
-  window pattern can shimmer slightly on distant towers before it fades to an average.
+- Restored buildings are painted volumes with glyph friezes and plaster relief, but no interiors or stucco masks.
+- The Urban world's facades are boxes with shader-drawn windows: sills, lintels, ledges and grime are drawn
+  in the shader and about a third of tenements carry balconies, but there are no interiors.
 - Walls are solid for the viewer (push-out collision) and for debris only. Cars follow their lane behind each other and
   obey the signals, but never turn or change lanes.
 - Destruction is local (chunks, scars, toppling chimneys and billboards); whole buildings do not collapse, and fire on
