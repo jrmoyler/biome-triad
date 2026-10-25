@@ -1523,7 +1523,8 @@ function columnGeo(){
   const parts = [base, sh, neck, bud, aba].map(stripAttrs); return mergeGeometries(parts);
 }
 function houseGeo(seed){
-  const r = rng(seed), parts = [], w = 6 + r()*5, d = 5 + r()*5, h = 3.4 + r()*2.2, brick = lin(0.9 + r()*0.08, 0.84 + r()*0.05, 0.76), dark = lin(0.07, 0.05, 0.04), wood = lin(0.38, 0.26, 0.15);
+  const r = rng(seed), parts = [], w = 6 + r()*5, d = 5 + r()*5, h = 3.4 + r()*2.2, dark = lin(0.07, 0.05, 0.04), wood = lin(0.38, 0.26, 0.15);
+  const white = seed % 3 === 0, brick = white ? lin(1.25, 1.22, 1.12) : lin(0.9 + r()*0.08, 0.84 + r()*0.05, 0.76);   // every third variant limewashed (the mud texture keeps it from glaring)
   const batter = (bw, bh, bd, k) => { const g = new THREE.BoxGeometry(bw, bh, bd); const p = g.attributes.position; for (let i=0;i<p.count;i++) if (p.getY(i) > 0){ p.setX(i, p.getX(i)*k); p.setZ(i, p.getZ(i)*k); } g.computeVertexNormals(); return g; };
   const put = (g, x, y, z, col, ry=0) => { g.rotateY(ry); g.translate(x, y, z); if (!g.attributes.color) colored(g, col); parts.push(g); return g; };
   put(aoBase(colored(batter(w, h, d, 0.95).translate(0, h/2, 0), brick), h*0.7, 0.5), 0, 0, 0, brick);
@@ -1536,6 +1537,14 @@ function houseGeo(seed){
   for (let i=0;i<3;i++){ const g = new THREE.CylinderGeometry(0.14, 0.14, 1.2, 6); g.rotateZ(Math.PI/2); put(g, w*0.5 + 0.35, h - 0.5 - i*0.7, -d*0.25 + i*d*0.25, wood); }   // projecting roof beams
   if (r() < 0.6){ for (const sx of [-1, 1]) put(new THREE.CylinderGeometry(0.1, 0.1, 2.3, 6), sx*w*0.3, h + 1.15, -d*0.15, wood); for (let i=0;i<7;i++) put(new THREE.BoxGeometry(w*0.7, 0.07, 0.35), 0, h + 2.3, -d*0.3 + i*0.4, lin(0.55, 0.5, 0.25)); }
   if (r() < 0.3) put(batter(w*0.5, 2.4, d*0.5, 0.92).translate(0, 1.2, 0), -w*0.15, h + 0.1, -d*0.1, brick);
+  // painted door frame, a bench against the front wall, and roof clutter: water jars, a pile of palm-frond fuel, sometimes a dovecote
+  const paint = [lin(0.16, 0.36, 0.62), lin(0.2, 0.5, 0.48), lin(0.66, 0.3, 0.16)][seed % 3];
+  put(new THREE.BoxGeometry(1.65, 0.18, 0.56), 0, 2.2, d*0.5 + 0.02, paint); for (const sx of [-0.74, 0.74]) put(new THREE.BoxGeometry(0.16, 2.1, 0.56), sx, 1.05, d*0.5 + 0.02, paint);
+  put(new THREE.BoxGeometry(w*0.35, 0.45, 0.55), w*0.25, 0.22, d*0.5 + 0.28, brick);
+  for (let i=0;i<2 + (r()*3|0);i++){ const g = new THREE.LatheGeometry([[0.01, 0], [0.24, 0.05], [0.33, 0.32], [0.2, 0.62], [0.13, 0.68], [0.16, 0.74]].map(q => new THREE.Vector2(q[0], q[1])), 8);
+    put(g, w*(0.2 - r()*0.3), h + 0.1, -d*(0.2 + r()*0.2), lin(0.62, 0.36, 0.22)); }
+  { const g = new THREE.BoxGeometry(1.6 + r(), 0.7, 1.2 + r()*0.6); g.rotateY(r()); put(g, -w*0.25, h + 0.45, d*0.15, lin(0.5, 0.42, 0.24)); }
+  if (r() < 0.35){ const dc = new THREE.LatheGeometry([[0.9, 0], [0.85, 1.2], [0.55, 2.4], [0.25, 3.0], [0.0, 3.2]].map(q => new THREE.Vector2(q[0], q[1])), 10); put(dc, w*0.3, h + 0.1, d*0.25, brick); }
   return worldUV(mergeGeometries(parts.map(stripAttrs)), 3.2);
 }
 /* Seated colossus (faces +z): throne with a back pillar, rounded limbs resting on the knees, broad collar, striped
@@ -1586,8 +1595,8 @@ function sphinxGeo(){
       p.setXYZ(i, x + dx/l*d, y + dy/l*d*0.3, z + dz/l*d);
       // nemes stripes: alternate bands of the headcloth, the faint ochre and blue of their paint long weathered off
       const sb = stripe ? smoothstep(0.38, 0.5, Math.abs(((y*1.55) % 1 + 1) % 1 - 0.5)) : 0;
-      const tone = (0.88 + 0.16*perlin(x*1.7, y*1.9 + z))*lerp(0.72, 1, smoothstep(0, 7, y))*(1 - 0.14*sb*stripe);
-      for (let j=0;j<3;j++) col[i*3+j] = lerp(lerp(lerp(st[j], dk[j], soft*0.75), pale[j], (1 - k)*0.6), [0.62, 0.6, 0.58][j], 0.25*sb*stripe)*tone; }
+      const tone = (0.88 + 0.16*perlin(x*1.7, y*1.9 + z))*lerp(0.72, 1, smoothstep(0, 7, y))*(1 - 0.22*sb*stripe);
+      for (let j=0;j<3;j++) col[i*3+j] = lerp(lerp(lerp(st[j], dk[j], soft*0.75), pale[j], (1 - k)*0.6), [0.56, 0.57, 0.6][j], 0.4*sb*stripe)*tone; }
     g.setAttribute('color', new THREE.BufferAttribute(col, 3)); parts.push(g); };
   // carved head (pre-scale space): an ellipsoid whose front is pressed onto a sculpted face field, so brow, sockets,
   // the broken nose, lips and chin come from one mesh; the nemes is a second shell cut open around the face
@@ -5913,7 +5922,7 @@ Helios.registerBiome({
       if (depth > 0.04) return { f:g - 0.12, mode:'wade', depth };
       const m = mudAt(x, z), sink = m.soft*(0.06 + 0.22*m.wet); return { f:g - sink, mode:'mud', depth:0, sink, m };
     };
-    const world = { group, heightAt, fogK:1,
+    const world = { group, heightAt, fogK:1, fogTint:new THREE.Color(),
       floorAt:(x, z, y) => floorInfo(x, z, y).f,
       ceilingAt:(x, z, y) => { if (inHut(x, z)) return y < HUT.y + 0.5 ? HUT.y - 0.15 : HUT.y + 2.95; const d = deckAt(x, z); return d !== null && y < d - 0.3 ? d - 0.12 : Infinity; },
       materialAt:(x, z) => { const g = ground(x, z); if (deckAt(x, z) !== null) return { id:'wood', flammability:0.35 };
@@ -6044,6 +6053,8 @@ Helios.registerBiome({
         // fog and mist: thickest at dawn and at night, wrapped around the viewer
         const dawn = (1 - smoothstep(0.05, 0.4, S.sun[1]))*smoothstep(-0.2, 0.0, S.sun[1]);
         world.fogK = 1 + 0.55*dawn + 0.25*env.night + 0.3*rk;
+        // swamp haze stays a damp grey-green under a low sun rather than desert gold, so the trunk rows recede in depth
+        world.fogTint.setRGB(0.6, 0.66, 0.62).multiplyScalar(0.3 + 0.7*env.day); world.fogTint.k = 0.45*(1 - smoothstep(0.3, 0.8, S.sun[1]))*(1 - env.night);
         mist.userData.tick(t); mist.material.uniforms.uDrift.value.set(env.wind[0]*0.25, 0, env.wind[1]*0.25); mist.material.uniforms.uOpacity.value = 0.22 + 0.2*dawn + 0.1*env.night;
         { const b = mist.geometry.attributes.aBase; let ch = false; for (let i=0;i<b.count;i++){ const ox = b.getX(i) - S.pos.x, oz = b.getZ(i) - S.pos.z; if (Math.abs(ox) > MR || Math.abs(oz) > MR){ b.setX(i, S.pos.x + ((ox + MR*3) % (MR*2)) - MR); b.setZ(i, S.pos.z + ((oz + MR*3) % (MR*2)) - MR); ch = true; } } if (ch) b.needsUpdate = true; }
         sheets.forEach((m, i) => { m.position.set(S.pos.x, st.wl + m.userData.y, S.pos.z); m.material.map.offset.set(S.pos.x/175 + t*0.002*(i + 1), S.pos.z/175); m.material.color.copy(scene.fog.color); m.material.opacity = (0.1 + 0.18*dawn + 0.08*rk)*(i ? 0.6 : 1); });
@@ -6729,7 +6740,7 @@ Helios.registerBiome({
       const c = [lerp(lerp(0.04, 0.012, t1), 0.003, t2), lerp(lerp(0.33, 0.13, t1), 0.01, t2), lerp(lerp(0.42, 0.26, t1), 0.026, t2)];
       const mixc = (k2, q) => { for (let j=0;j<3;j++) c[j] = lerp(c[j], q[j], k2); };
       mixc(rain*shallow*0.55, [0.16, 0.24, 0.25]); mixc(silty*0.65 + siltNear*0.7, [0.24, 0.25, 0.17]);
-      const bright = (0.06 + 0.94*dayL)*(1 - 0.35*rain);
+      const bright = (0.1 + 0.9*dayL)*(1 - 0.35*rain);
       // fog is blended after the output encode, so the water colour is display-referred; lit uses (sky light, the surface) take it linear
       fogCol.setRGB(c[0]*bright, c[1]*bright, c[2]*bright); world.fogTint.copy(fogCol);
       fogLin.setRGB(c[0]*bright, c[1]*bright, c[2]*bright, THREE.SRGBColorSpace);
@@ -6744,14 +6755,14 @@ Helios.registerBiome({
       DEEP_U.uDCaus.value.set(1.0, 0.97, 0.88, 2.6*env.day*(1 - 0.65*rain)*(1 - 0.85*silty));
       shaftMat.uniforms.uInt.value = 0.3*smoothstep(-0.03, 0.24, S.sun[1])*(1 - 0.85*rain)*(1 - 0.9*silty)*(1 - smoothstep(25, 90, d));   // refraction keeps the beams steep even under a low sun
       // grade: glow carries the frame as daylight fades with depth (plankton, lanternfish, the vents)
-      { const dk = smoothstep(50, 320, d), ak = smoothstep(0, 35, d)*(1 - dk); world.post.bloom = 0.6 + 0.35*dk; world.post.thresh = 0.78 - 0.22*dk; world.post.contrast = 0.16 - 0.08*dk;
+      { const dk = smoothstep(50, 320, d), ak = smoothstep(0, 35, d)*(1 - dk); world.post.bloom = (0.6 + 0.35*dk)*(1 - 0.45*env.night); world.post.thresh = 0.78 - 0.22*dk;   // the grade already lifts bloom by night world.post.contrast = 0.16 - 0.08*dk;
         tintV[0] = 1 - 0.13*ak; tintV[1] = 1; tintV[2] = 1 + 0.04*ak; world.post.tint = tintV; }   // even near things lose red through the water
       // diver's lamp: on in the deep, at night, in caverns and silt
       st.inCave = st.sideIn.some(Boolean);
       const wantLamp = Math.max(smoothstep(45, 90, d), env.night*0.9, st.inCave ? 1 : 0, siltNear > 0.3 ? 0.7 : 0, silty*0.6);
       st.lampK += (wantLamp - st.lampK)*Math.min(1, dt*2);
       const cp = Math.cos(S.pitch); lamp.position.copy(camera.position).add(V3(0, -0.25, 0)); lamp.target.position.set(S.pos.x + Math.sin(S.yaw)*cp*10, S.pos.y + Math.sin(S.pitch)*10, S.pos.z - Math.cos(S.yaw)*cp*10);
-      lamp.intensity = 420*st.lampK;
+      lamp.intensity = 340*st.lampK;
       // vents: plume, glow lights on the two nearest, eruption bursts
       st.ventBurst = Math.max(0, st.ventBurst - dt*0.12);
       plume.userData.tick(t); plume.material.uniforms.uGlowK.value = 0.35 + st.ventBurst*3; plume.material.uniforms.uRise.value = 36 + st.ventBurst*50;
