@@ -4996,8 +4996,18 @@ const CANYON_FRAG = `
           vec3 lc; vec4 ly = canyonLayer(yw, lc);
           float lam = 0.9 + 0.07*sin(vWP.y*7.0 + n2*4.0) + 0.05*sin(vWP.y*23.0 + n1*5.0);
           float bad = (1.0 - smoothstep(uCanB.z*0.75, uCanB.z, length(vWP.xz - uCanB.xy)))*(1.0 - smoothstep(24.0, 38.0, vWP.y))*smoothstep(1.5, 4.0, vWP.y)*(1.0 - smoothstep(0.6, 0.8, slope));
+          // a soft bed under a hard one is mantled by talus shed from the cliff above: fans of its colour reach down the slope
+          vec3 lcU; vec4 lyU = canyonLayer(yw + (1.0 - ly.x)*ly.w + 0.6, lcU);
+          float uu = mix(vWP.x, vWP.z, cWx), fan = smoothstep(0.35, 0.75, tvn(vec2(uu*0.045, vWP.y*0.006)) + 0.35*ly.x - 0.15) * (1.0 - ly.y)*lyU.y*smoothstep(0.15, 0.85, ly.x);
+          lc = mix(lc, lcU*(0.86 + 0.14*n2), 0.75*fan);
+          lc *= (0.88 + 0.24*tvn(vWP.xz*0.0025 + 3.0))*mix(vec3(1.0), vec3(1.06, 0.97, 0.92), tvn(vWP.xz*0.004 + 9.0));   // beds drift in tone and redness along the walls
           vec3 rock = mix(lc*lam*(0.84 + 0.3*tvn(vec2((vWP.x + vWP.z)*0.004, vWP.y*0.03))), canyonBadBand(vWP.y + n3*1.5)*(0.92 + 0.1*sin(vWP.y*19.0)), bad);
           float face = max(cl, bad*0.9)*(1.0 - sSnow);
+          // the flats: desert pavement (darker varnished gravel) and grey cobble bars in the wash break up the sand
+          float flatK = (1.0 - cl)*(1.0 - sSnow), pav = smoothstep(0.55, 0.78, tvn(twp*0.018 + 4.0) + 0.25*n2 - 0.12);
+          diffuseColor.rgb *= mix(vec3(1.0), vec3(0.8, 0.72, 0.68), pav*flatK*smoothstep(3.0, 8.0, vWP.y));
+          float bar = smoothstep(0.6, 0.8, tvn(twp*vec2(0.012, 0.03) + 1.7))*(1.0 - smoothstep(0.5, 2.0, vWP.y));
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.27, 0.2, 0.15)*(0.8 + 0.4*n4), bar*flatK*0.5);
           diffuseColor.rgb = mix(diffuseColor.rgb, rock*(0.78 + 0.32*n1)*(0.88 + 0.24*n4)*(0.9 + 0.2*n2), face);
           vec4 dc = mix(canyonDecal(vWP.x, vWP.y, n3, wetA, ly.x, ly.y), canyonDecal(vWP.z, vWP.y, n3, wetA, ly.x, ly.y), cWx)*cl*(1.0 - bad);
           diffuseColor.rgb *= 1.0 - 0.72*dc.x;                                   // desert varnish below the lips of the hard beds
@@ -5123,8 +5133,9 @@ Helios.registerBiome({
   climate:{ temp:29, night:14, lapse:-0.0065 }, surface:{ humidity:0.15 },
   clouds:{ cover:0.22, base:2600, top:3600, cirrus:0.55 },
   sky:{ turbidity:7, rayleigh:1.4, mie:0.006, mieG:0.86 },
-  fog:{ density:0.00034, tint:[1.12,0.94,0.8], storm:16, stormTint:[0.8,0.52,0.3] },
+  fog:{ density:0.00041, tint:[1.08,0.95,0.86], storm:16, stormTint:[0.8,0.52,0.3] },   // a little more air between the rims, so the far walls step back
   ground:[0.55,0.3,0.18],
+  post:{ contrast:0.44, sat:1.05, warm:0.025, ao:0.72, aoR:3.2, shafts:0.38, bloom:0.42, vig:0.3 },   // wide AO darkens the foot of each cliff onto its bench
   precip:{ kind:'dust', color:0xd8b48a, size:0.06, fall:0.15, sway:2.5, base:0.03, storm:0, rainLines:false, lightning:false, opacity:0.5 },
   camera(){ const C = canyonShape(), z = 170, x = C.rx(z) + 263; return { pos:[x, Math.max(220, C.terrainH(x, z) + 6), z], look:[C.rx(z) + 39, 131, -8] }; },   // over the rim, down the gorge
   build(k){
@@ -5535,6 +5546,62 @@ function alpineChunkGeo(seed){
   g.setAttribute('color', new THREE.BufferAttribute(col, 3)); g.computeVertexNormals(); return owned(g);
 }
 
+/* Granite walls finer than the mesh: the face is broken into fractured blocks (two scales of Voronoi cells, painted in
+   the plane of the wall, x or z by its facing, so they stand upright on a sloped face). Each block has its own tone and
+   tilt, so the low sun picks out facets; blocks tilted up are ledges, which hold snow above the snowline; the joints
+   between them are dark and stained below. */
+const ALPINE_GLSL = `
+uniform float uAlpSnow;
+vec4 alpCell(vec2 p){   // x: distance to the nearest joint (cell units), yzw: the cell's hashes
+  vec2 i = floor(p), f = fract(p), best = vec2(0.0); float d1 = 9.0, d2 = 9.0;
+  for (int y=-1;y<=1;y++) for (int x=-1;x<=1;x++){ vec2 g = vec2(float(x), float(y)), c = i + g, r = g + 0.15 + 0.7*vec2(th21(c), th21(c + 17.31)) - f; float d = dot(r, r);
+    if (d < d1){ d2 = d1; d1 = d; best = c; } else if (d < d2) d2 = d; }
+  return vec4(sqrt(d2) - sqrt(d1), th21(best + 3.7), th21(best + 9.1), th21(best + 5.3));
+}
+`;
+const ALPINE_FRAG = `
+        float aCl = 0.0, aAA = 1.0, aAB = 1.0; vec3 aT = vec3(1.0, 0.0, 0.0); vec4 aC = vec4(1.0), aD = vec4(1.0);
+        {
+          aCl = smoothstep(0.3, 0.56, slope)*(1.0 - ice);
+          float wx = pow(abs(vWN.x), 3.0), wz = pow(abs(vWN.z), 3.0), sel = step(0.5 + 0.2*(n1 - 0.5), wx/(wx + wz + 1e-4));   // the seam between projections reads as one more joint
+          float u = mix(vWP.x, vWP.z + 37.0, sel); aT = mix(vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), sel);
+          float yw = vWP.y + 3.0*tvn(vec2(u*0.05, vWP.y*0.02));
+          vec2 pa = vec2(u/10.0, yw/4.2), pb = vec2(u/2.8 + 5.0, yw/1.6);   // slabs wider than tall, like sheeted granite
+          aC = alpCell(pa); aD = alpCell(pb);
+          aAA = 1.0 - smoothstep(0.05, 0.16, max(fwidth(pa.x), fwidth(pa.y)));   // fade each scale out before it aliases
+          aAB = 1.0 - smoothstep(0.05, 0.16, max(fwidth(pb.x), fwidth(pb.y)));
+          vec2 q = vWP.xz;
+          vec3 gr = mix(vec3(0.11, 0.11, 0.112), vec3(0.21, 0.185, 0.15), tvn(q*0.005 + vWP.y*0.004));   // linear albedo
+          gr = mix(gr, vec3(0.26, 0.2, 0.14), 0.3*smoothstep(0.55, 0.8, tvn(q*0.03 + vWP.y*0.02)));       // warm feldspar-rich patches
+          gr *= (0.88 + 0.24*mix(0.5, aC.y, aAA))*(0.96 + 0.08*mix(0.5, aD.y, aAB))*(0.86 + 0.22*n1)*(0.94 + 0.12*n4);
+          // only some joints stay open (broken runs); the rest are healed seams that show only as a change of facet
+          float jA = (1.0 - smoothstep(0.015, 0.07, aC.x))*aAA*smoothstep(0.42, 0.62, tvn(pa*2.3 + 7.0));
+          float jB = (1.0 - smoothstep(0.01, 0.05, aD.x))*aAB*smoothstep(0.55, 0.75, tvn(pb*1.7 + 3.0))*0.5;
+          float stain = smoothstep(0.62, 0.86, tvn(vec2(u*0.28, vWP.y*0.012)));                            // water streaks down the face
+          gr *= (1.0 - 0.38*stain)*(1.0 - 0.7*max(jA, jB));                                              // open joints
+          gr = mix(gr, vec3(0.16, 0.11, 0.03), 0.3*smoothstep(0.66, 0.86, tvn(q*0.21 + vWP.y*0.17))*(1.0 - smoothstep(700.0, 900.0, vWP.y)));   // lichen
+          float alt = smoothstep(uAlpSnow - 50.0, uAlpSnow + 70.0, vWP.y + 60.0*tvn(q*0.01 + 7.0));
+          float flat0 = 1.0 - smoothstep(0.34, 0.6, slope + 0.25*(tvn(q*0.05) - 0.5));
+          float ledge = smoothstep(0.55, 0.8, aC.z)*aAA*(1.0 - jA), dust = 0.3*smoothstep(0.62, 0.82, tvn(q*0.11 + vWP.y*0.05));
+          float sn = alt*clamp(max(flat0, 0.9*ledge + dust), 0.0, 1.0);
+          gr = mix(gr, vec3(0.9, 0.93, 0.98)*(0.93 + 0.07*n2), sn);
+          diffuseColor.rgb = mix(diffuseColor.rgb, gr, aCl*(1.0 - sSnow));
+        }`;
+const ALPINE_NRM = `
+          { float kk = aCl*(1.0 - smoothstep(200.0, 900.0, dist))*(1.0 - 0.7*sSnow);
+            vec3 B = vec3(0.0, 1.0, 0.0), tA = aT*(aC.w - 0.5)*0.7 + B*(aC.z - 0.4)*0.7, tB = aT*(aD.w - 0.5)*0.35 + B*(aD.z - 0.45)*0.3;   // facets lean out or tip up (ledges)
+            nw = normalize(nw + (tA*aAA + tB*aAB)*kk); }
+`;
+function alpineRockify(mat, AU){
+  const pc = mat.onBeforeCompile;
+  mat.onBeforeCompile = sh => { pc(sh); Object.assign(sh.uniforms, AU);
+    sh.fragmentShader = sh.fragmentShader.replace('void main() {', ALPINE_GLSL + 'void main() {').replace('vec3(0.9, 0.93, 0.97)*(0.93 + 0.07*n2), sSnow);', 'vec3(0.9, 0.93, 0.97)*(0.93 + 0.07*n2), sSnow);' + ALPINE_FRAG)
+      .replace('normal = normalize(mat3(viewMatrix) * nw);', ALPINE_NRM + 'normal = normalize(mat3(viewMatrix) * nw);')
+      .replace('float gy = rk*', 'float gy = 0.0*rk*'); };   // the generic 2 m strata steps fight the ledges
+  mat.customProgramCacheKey = () => 'terrain6alpine';
+  return mat;
+}
+
 Helios.registerBiome({
   id:'alpine', label:'Alpine', bounds:[0,-900,2350], ceiling:2600, windy:1.1,
   clouds:{ cover:0.5, base:1700, top:3400, cirrus:0.45 },
@@ -5553,10 +5620,10 @@ Helios.registerBiome({
     const nearBridge = (x,z) => Math.abs(z - zB) < 14 && Math.abs(x - sx(zB)) < 46;
     const snowAt = (x,y,z,ny) => { const hk = 0.17*smoothstep(850, 1150, y); return smoothstep(0.42 - hk, 0.66 - hk, ny + 0.15*perlin(x*0.02, z*0.02)) * smoothstep(690, 790, y + 70*perlin(x*0.006 + 3, z*0.006)); };
     const talusAt = (x,z) => { const ad = Math.abs(x - vx(z)), wS = wallAt(z); return smoothstep(wS - 200, wS - 150, ad)*(1 - smoothstep(wS - 70, wS - 30, ad)); };
-    const group = new THREE.Group();
+    const group = new THREE.Group(), AU = { uAlpSnow:{ value:720 } };
 
-    group.add(makeTerrain({ size:4800, cz:-1000, seg:560, height:ground, apron:{ size:15000, seg:130 },
-      detail:{ rock:[0.3,0.29,0.28], rockLo:0.55, bump:16, ripple:0, wet:0.35, snow:1, strata:1.3, band:[105, 0.5] },
+    const terrM = makeTerrain({ size:4800, cz:-1000, seg:560, height:ground, apron:{ size:15000, seg:130 },
+      detail:{ rock:[0.3,0.29,0.28], rockLo:0.55, bump:16, ripple:0, wet:0.35, snow:1, strata:0 },
       kind:(x,y,z)=> glacier(x,z).m > 0.72 ? 3 : 0,
       color:(c,x,y,z,ny)=>{
         const n = 0.5 + 0.5*perlin(x*0.03, z*0.03), m = 0.5 + 0.5*perlin(x*0.11, z*0.11), g = glacier(x,z);
@@ -5575,8 +5642,8 @@ Helios.registerBiome({
         const schist = 0.25*smoothstep(0.2, 0.6, perlin(x*0.004 + 11, z*0.004));   // dark schist bands come from the shader (band) at full resolution
         const rust = smoothstep(0.3, 0.6, perlin(x*0.02 + 3, z*0.02 + y*0.01))*(1 - schist), lich = smoothstep(0.35, 0.65, perlin(x*0.05, z*0.05 + y*0.02));
         let rock = [0,1,2].map(j => lerp(lerp(lerp([0.6,0.55,0.46][j], [0.23,0.23,0.25][j], schist), [0.52,0.33,0.19][j], rust*0.55), [0.4,0.44,0.3][j], lich*0.3)*rv*(0.88 + 0.24*m));
-        if (ny < 0.5) rock = rock.map(v => v*0.72);   // cliff bands read darker than the slabs between them
-        const scree = [0.63 + 0.08*n, 0.61 + 0.08*n, 0.56 + 0.07*n];
+        rock = rock.map(v => v*(1 - 0.28*smoothstep(0.58, 0.42, ny)));   // cliff bands read darker than the slabs between them (a hard step zig-zags along the mesh)
+        const scree = [0.5 + 0.08*n, 0.49 + 0.08*n, 0.46 + 0.07*n];   // granite talus
         // meadow: lush and dry patches, heather and buttercup swathes, damp seeps by water, tundra higher up, the worn path
         const hi = smoothstep(380, 560, y + 40*perlin(x*0.01, z*0.01)), pt = 0.5 + 0.5*perlin(x*0.012 + 7, z*0.012);
         const dry = smoothstep(0.58, 0.8, 0.5 + 0.5*perlin(x*0.006 + 21, z*0.006)), fl = alpineFlowerAt(x, z), seep = 1 - smoothstep(9, 35, Math.abs(x - sx(z))) + 0.7*smoothstep(0.45, 0.7, perlin(x*0.015 + 31, z*0.015));
@@ -5591,7 +5658,8 @@ Helios.registerBiome({
         // snow lodged in couloirs and on ledges above the permanent line
         const gq = clamp(1 - 1.4*ridged(x*0.011 + 9, z*0.011, 3), 0, 1), cou = smoothstep(560, 720, y + 50*perlin(x*0.01, z*0.01))*smoothstep(0.5, 0.75, gq*0.6 + (ny - 0.45)*0.9 + 0.2*perlin(x*0.05, z*0.05));
         const s = Math.max(snowAt(x, y, z, ny), cou*0.9); return srgb(c, lerp(col[0], 0.92 + 0.04*m, s), lerp(col[1], 0.94 + 0.03*m, s), lerp(col[2], 0.98, s));
-      } }));
+      } });
+    alpineRockify(terrM.material, AU); group.add(terrM);
 
     // ---- Glacial stream: down the valley from the snout, through the gorge in the riegel; cascades off the walls
     const waterM = alpineWaterMat();
@@ -5830,7 +5898,7 @@ Helios.registerBiome({
       lastEnv = env;
       // elevation-dependent weather: freezing level from the climate, cloud band riding just above it
       const yF = st.yF = freezeY(env);
-      st.snowY += ((SURF.amb.snow > 0.15 ? Math.max(40, yF - 40) : Math.max(yF, 690)) - st.snowY)*Math.min(1, dt*0.08);
+      st.snowY += ((SURF.amb.snow > 0.15 ? Math.max(40, yF - 40) : Math.max(yF, 690)) - st.snowY)*Math.min(1, dt*0.08); AU.uAlpSnow.value = st.snowY;
       st.cloudY += (clamp(yF + 50 - 160*env.rain, 60, 1500) - st.cloudY)*Math.min(1, dt*0.25);
       const band = (S.pos.y - yF)/45; world.precip = band > 1 ? P_SNOW : band < -1 ? P_RAIN : P_SLEET;
       const thick = 0.015 + 0.26*env.rain + 0.15*smoothstep(1.2, 4, env.fog);
@@ -7279,7 +7347,7 @@ function caveFungusGeo(seed){
   for (let i=0;i<6;i++){ const h = 0.06 + r()*0.22, cr = 0.04 + r()*0.08, x = (r() - 0.5)*0.5, z = (r() - 0.5)*0.5;
     const st = new THREE.CylinderGeometry(cr*0.25, cr*0.32, h, 5); st.translate(x, h/2, z);
     const cap = new THREE.SphereGeometry(cr, 8, 4, 0, TAU, 0, Math.PI/2); cap.scale(1, 0.55, 1); cap.translate(x, h, z);
-    parts.push(colored(stripAttrs(st), lin(0.5, 0.58, 0.48)), colored(stripAttrs(cap), lin(0.75, 0.95, 0.7))); }
+    parts.push(colored(stripAttrs(st), lin(0.5, 0.58, 0.48)), colored(stripAttrs(cap), lin(0.5, 0.9, 0.56))); }
   const g = mergeGeometries(parts); OWNED.push(g); return g;
 }
 /* Cave sound: drips, footsteps, rock falls and the river through a convolution reverb whose decay is set by the chamber
@@ -7317,6 +7385,17 @@ const caveAudio = {
     o.connect(this.dry); o.connect(this.conv); s.start();
   }
 };
+
+/* Wet limestone: seeps, films on the flowstone and drip-fed patches go glossy and a little darker, so the headlamp and
+   the shaft light glint off the rock instead of dying on a matte surface */
+function caveWetRock(mat){
+  const pc = mat.onBeforeCompile;
+  mat.onBeforeCompile = sh => { pc(sh); sh.fragmentShader = sh.fragmentShader.replace('roughnessFactor = mix(roughnessFactor, 0.85, sSnow);', `roughnessFactor = mix(roughnessFactor, 0.85, sSnow);
+        { float wv = 0.6*tvn(vWP.xz*0.31 + vWP.y*0.23) + 0.4*tvn(vWP.xz*1.7 + vWP.y*1.3), wr = clamp(smoothstep(0.5, 0.72, wv)*0.6 + 0.6*smoothstep(0.25, 0.6, slope)*smoothstep(0.35, 0.65, n2), 0.0, 0.75);
+          roughnessFactor = mix(roughnessFactor, 0.4 + 0.14*n4, wr); diffuseColor.rgb *= 1.0 - 0.2*wr; }`); };
+  mat.customProgramCacheKey = () => 'terrain6cave';
+  return mat;
+}
 
 Helios.registerBiome({
   id:'caverns', label:'Caverns', bounds:[30,-40,420], floor:-400, ceiling:600, windy:0.4,
@@ -7422,8 +7501,8 @@ Helios.registerBiome({
       const a = Math.atan2(p.getZ(i) - s.z, p.getX(i) - s.x); p.setXYZ(i, s.x + Math.cos(a)*s.R, y, s.z + Math.sin(a)*s.R); } g.computeVertexNormals(); };
     snapRim(roofGeo, CAVE_SURF - 2);
     paint(floorGeo, floorPaint); paint(roofGeo, roofPaint);
-    const floorM = new THREE.Mesh(floorGeo, terrainMaterial({ rock:[0.5,0.45,0.39], rockLo:0.72, bump:9, wet:0, strata:0.5 }));
-    const roofM = new THREE.Mesh(roofGeo, terrainMaterial({ rock:[0.4,0.37,0.33], rockLo:5, bump:10, wet:0, strata:0 }));
+    const floorM = new THREE.Mesh(floorGeo, caveWetRock(terrainMaterial({ rock:[0.5,0.45,0.39], rockLo:0.72, bump:9, wet:0, strata:0.5 })));
+    const roofM = new THREE.Mesh(roofGeo, caveWetRock(terrainMaterial({ rock:[0.4,0.37,0.33], rockLo:5, bump:10, wet:0, strata:0 })));
     for (const m of [floorM, roofM]){ m.castShadow = m.receiveShadow = true; group.add(m); }
 
     // ---- The plateau above, holed at the sinkholes, with a horizon ring
@@ -7502,8 +7581,8 @@ Helios.registerBiome({
     if (CUR.length){ const m = new THREE.InstancedMesh(curtGeo, new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.45, side:THREE.DoubleSide, emissive:0x1a0d06 }), CUR.length);
       CUR.forEach((c, i) => { dm.position.set(c.x, c.y, c.z); dm.rotation.set(0, c.ry, 0); dm.scale.set(c.s, c.L, c.s); dm.updateMatrix(); m.setMatrixAt(i, dm.matrix); }); group.add(m); }
     // crystal geodes in the Crystal Grotto and the Sealed Chamber
-    const crysMats = [new THREE.MeshStandardMaterial({ color:0xc9b0f0, emissive:0x4a22b0, emissiveIntensity:0.22, roughness:0.08, metalness:0.35, flatShading:true }),
-      new THREE.MeshStandardMaterial({ color:0xe2f2f6, emissive:0x14627e, emissiveIntensity:0.18, roughness:0.06, metalness:0.35, flatShading:true })];
+    const crysMats = [new THREE.MeshStandardMaterial({ color:0xc9b0f0, emissive:0x4a22b0, emissiveIntensity:0.5, roughness:0.08, metalness:0.35, flatShading:true }),
+      new THREE.MeshStandardMaterial({ color:0xe2f2f6, emissive:0x14627e, emissiveIntensity:0.45, roughness:0.06, metalness:0.35, flatShading:true })];
     const crysGeo = caveCrystalGeo(17);
     crysMats.forEach((mat, mi) => { const list = []; for (const [ri, n0] of [[1, 70], [4, 22]]){ const rm = rooms[ri], n = Math.round(n0*(mi ? 0.8 : 1.2)*dens), start = list.length;
         for (let t=0; t<n*30 && list.length - start < n; t++){ const a = R()*TAU, d = Math.sqrt(R())*rm.R*1.2, x = rm.x + Math.cos(a)*d, z = rm.z + Math.sin(a)*d, o = op(x, z); if (o < 0.02 || o > 0.55) continue;
@@ -7511,7 +7590,7 @@ Helios.registerBiome({
           list.push({ x, y:roof ? bil(RF, x, z) + 0.2 : fl(x, z) - 0.1, z, rx:roof ? Math.PI : tilt, ry:out, s:big }); } }
       const m = new THREE.InstancedMesh(crysGeo, mat, list.length); list.forEach((c, i) => { dm.position.set(c.x, c.y, c.z); dm.rotation.set(c.rx, c.ry, 0, 'YXZ'); dm.scale.setScalar(c.s); dm.updateMatrix(); m.setMatrixAt(i, dm.matrix); }); group.add(m); });
     // luminous fungus in the old workings and the crawlway (Grow adds more)
-    const FUN_CAP = 1100, fungi = new THREE.InstancedMesh(caveFungusGeo(23), new THREE.MeshStandardMaterial({ vertexColors:true, emissive:0x37e88e, emissiveIntensity:0.9, roughness:0.6 }), FUN_CAP);
+    const FUN_CAP = 1100, fungi = new THREE.InstancedMesh(caveFungusGeo(23), new THREE.MeshStandardMaterial({ vertexColors:true, emissive:0x37e88e, emissiveIntensity:0.95, roughness:0.6 }), FUN_CAP);   // past the bloom threshold after exposure, still green
     const addFungus = (x, z, s) => { if (fungi.count >= FUN_CAP) return; dm.position.set(x, fl(x, z) - 0.03, z); dm.rotation.set(0, R()*TAU, 0); dm.scale.setScalar(s); dm.updateMatrix(); fungi.setMatrixAt(fungi.count++, dm.matrix); fungi.instanceMatrix.needsUpdate = true; };
     fungi.count = 0; sample(Math.round(420*dens), (x, z) => { const b = BEST[nearId(x, z)], o = op(x, z); return [3, 8, 11, 4].includes(b) && o > 0.02 && o < 0.5 && waterAt(x, z) < fl(x, z) - 0.2 ? [x, z] : null; }).forEach(([x, z]) => addFungus(x, z, 0.7 + R()*1.4));
     fungi.frustumCulled = false; group.add(fungi);
@@ -7595,7 +7674,11 @@ Helios.registerBiome({
     const burst = (x, y, z, k) => { const b = dust.geometry.attributes.aBase; for (let i=0;i<b.count;i++) b.setXYZ(i, x + (R() - 0.5)*4*k, y + R()*2, z + (R() - 0.5)*4*k); b.needsUpdate = true; DU.x = x; DU.y = y; DU.z = z; DU.k = Math.max(DU.k*0.5, Math.min(1, 0.4 + 0.3*k)); };
 
     // ---- Light: headlamp, sinkhole bounce light, crystal glow, lanterns, torches
-    const lamp = new THREE.SpotLight(0xfff0d8, 0, 0, 0.56, 0.95, 2); group.add(lamp, lamp.target);
+    const lamp = new THREE.SpotLight(0xfff0d8, 0, 0, 0.62, 0.95, 2); group.add(lamp, lamp.target);
+    // fill: the lamp's own spill bouncing off the rock round the viewer, and a dim cave ambience (cool from the shafts
+    // above, warm off the floor below so the roof reads); without them anything beyond the beam is black
+    const lampFill = new THREE.PointLight(0xffe2c0, 0, 42, 1.6); group.add(lampFill);
+    const caveFill = new THREE.HemisphereLight(0x8e9cb6, 0x80694f, 0); group.add(caveFill);
     const bounce = sinks.map(s => { const l = new THREE.PointLight(0xdfe8ff, 0, 0, 2); l.position.set(s.x, fl(s.x, s.z) + (s.R > 15 ? 26 : 16), s.z); group.add(l); return l; });
     const crysL = new THREE.PointLight(0x9c7bff, 0, 0, 2); crysL.position.set(rooms[1].x, rooms[1].fl + 7, rooms[1].z); group.add(crysL);
     const lanternL = new THREE.PointLight(0xffa04a, 0, 0, 2); { const p = toW(0, 4.5, 0); lanternL.position.copy(p); } group.add(lanternL);
@@ -7749,10 +7832,12 @@ Helios.registerBiome({
       sound('crash', PL.x, fl(PL.x, PL.z), PL.z, 1.4, 0.7); say('The rock fall collapsed: a way opens to the Sealed Chamber'); };
 
     const P_NONE = { kind:'none', rainLines:false, lightning:false }, P_RAIN = { kind:'snow', base:0, storm:0, rainLines:true };
-    const st = { open:0, near:0, b:0, lamp:1, name:'', exp:2.4, lastStep:V3(), stepD:0, lux:0 };
+    const st = { open:0, near:0, b:0, lamp:1, name:'', exp:2.4, lastStep:V3(), stepD:0, lux:0, wall:99 };
     let prevK = 0.03, lastEnv = { day:1, night:0, rain:0 };
     const fwd = V3(), tmpC = new THREE.Color();
-    const world = { group, heightAt:fl, precip:P_NONE, fogK:1, lightK:0.03, envK:0.02, exposureK:2.4, envTint:new THREE.Color(0, 0, 0), hemiTint:new THREE.Color(0.45, 0.5, 0.58), fogTint:new THREE.Color(0.006, 0.007, 0.009),
+    const envMats = [floorM.material, roofM.material, rockMat, debrisMat];
+    const world = { group, heightAt:fl, precip:P_NONE, fogK:1, lightK:0.04, envK:0.02, exposureK:2.4, envTint:new THREE.Color(0, 0, 0), hemiTint:new THREE.Color(0.45, 0.5, 0.58), fogTint:new THREE.Color(0.006, 0.007, 0.009),
+      post:{ bloom:0.85, thresh:0.5, shafts:0, ao:0.8, aoR:2.6, contrast:0.3, vig:0.4, sat:1.04 },
       floorAt:(x, z, y) => above(x, z, y) ? surfH(x, z) : fl(x, z),
       ceilingAt:(x, z, y) => (inHole(x, z, 1) || above(x, z, y)) ? 1400 : bil(RF, x, z),
       materialAt:(x, z) => { if (waterAt(x, z) > fl(x, z) - 0.1) return 'water'; for (const s of sinks) if (Math.hypot(x - s.x, z - s.z) < s.R*1.2) return 'vegetation'; return 'stone'; },
@@ -7803,29 +7888,36 @@ Helios.registerBiome({
       // confined lighting: no daylight but what falls down the shafts (sun shadows decide where), eyes adapt
       const sunHigh = smoothstep(0.3, 0.85, env.sunDir.y), dayK = env.day*(1 - 0.55*env.rain);
       const sunF = lerp(near*(0.35 + 0.65*sunHigh), 1, o); sun.intensity *= sunF/Math.max(prevK, 1e-3);
-      world.lightK = prevK = lerp(0.028 + 0.05*near, 1, o); world.envK = lerp(0.02 + 0.07*near*dayK, 1, o);
+      world.lightK = prevK = lerp(0.04 + 0.08*near, 1, o); world.envK = lerp(0.02 + 0.07*near*dayK, 1, o);
       world.hemiTint.k = 1 - o; world.fogTint.k = 1 - o;
+      // the haze picks up the skylight under the shafts; rock ignores the sky probe underground (it can lag a world switch)
+      world.fogTint.setRGB(0.007, 0.0085, 0.011).multiplyScalar(0.7 + 2.2*near*dayK + 0.4*st.lamp);
+      for (const m of envMats) m.envMapIntensity = lerp(0.12, 1, o);
+      caveFill.intensity = (1 - o)*(3.0 + 1.6*near*dayK);
+      const pp = world.post; pp.bloom = lerp(0.85, 0.5, o); pp.thresh = lerp(0.5, 0.88, o); pp.shafts = lerp(0, 0.3, o); pp.ao = lerp(0.8, 0.62, o); pp.aoR = lerp(2.6, 1.6, o); pp.vig = lerp(0.4, 0.26, o);
       world.fogK = lerp((1 + 0.25*(env.fog - 1))/env.fog*lerp(1, 0.5, near*dayK), 0.08, o);
       world.precip = (hole || o > 0.5) ? P_RAIN : P_NONE;
-      bounce.forEach((l, i) => { l.intensity = dayK*(i ? 900 : 2600)*(0.5 + 0.5*sunHigh) + env.night*(i ? 8 : 20); l.color.copy(sun.color).lerp(tmpC.setRGB(0.75, 0.85, 1), 0.6); });
+      bounce.forEach((l, i) => { l.intensity = dayK*(i ? 1800 : 4800)*(0.6 + 0.3*sunHigh) + env.night*(i ? 40 : 110); l.color.copy(sun.color).lerp(tmpC.setRGB(0.75, 0.85, 1), 0.6); });
       crysL.intensity = 70*(0.8 + 0.2*Math.sin(t*0.9) + 0.08*Math.sin(t*3.7));
       lanternL.intensity = 95*(0.88 + 0.07*Math.sin(t*11) + 0.05*Math.sin(t*17.3));
       const lightNear = smoothstep(40, 8, Math.hypot(px - crysL.position.x, pz - crysL.position.z))*0.25 + smoothstep(30, 6, Math.hypot(px - lanternL.position.x, pz - lanternL.position.z))*0.3;
       let tl = null, td = 70; for (const q of torches){ if (!q.lit) continue; const d = Math.hypot(q.x - px, q.z - pz); q.spr.scale.setScalar(1.8 + 0.4*Math.sin(t*13 + q.x)); if (d < td){ td = d; tl = q; } }
       if (tl){ torchL.position.set(tl.x, tl.y + 0.4, tl.z); torchL.intensity = 140*(0.85 + 0.15*Math.sin(t*15)*Math.sin(t*7.7)); } else torchL.intensity = 0;
       const b = st.b = clamp(near*dayK*(0.45 + 0.55*sunHigh)*1.3 + lightNear + (tl ? smoothstep(25, 4, td)*0.3 : 0), 0, 1);
-      st.exp += (lerp(lerp(2.7, 1.2, b), 1, o) - st.exp)*Math.min(1, dt*0.6); world.exposureK = st.exp;
+      const bx = Math.min(1, b + st.lamp*smoothstep(10, 1.5, st.wall)*0.55);   // eyes stop down when the lamp is on rock close ahead (not fed back into the lamp switch)
+      st.exp += (lerp(lerp(2.7, 1.2, bx), 1, o) - st.exp)*Math.min(1, dt*0.6); world.exposureK = st.exp;
       const lampT = (1 - o)*(1 - smoothstep(0.35, 0.8, b)) > 0.25 ? 1 : 0; st.lamp += (lampT - st.lamp)*Math.min(1, dt*4);
       st.lux = clamp(b + 0.02, 0, 1);
       fwd.set(Math.sin(S.yaw)*Math.cos(S.pitch), Math.sin(S.pitch), -Math.cos(S.yaw)*Math.cos(S.pitch));
       lamp.position.set(px + Math.cos(S.yaw)*0.25, py + 0.15, pz + Math.sin(S.yaw)*0.25); lamp.target.position.copy(S.pos).addScaledVector(fwd, 12); lamp.target.updateMatrixWorld();
-      lamp.intensity = st.lamp*700;
+      lamp.intensity = st.lamp*1100;
+      lampFill.position.set(px - fwd.x*1.5, py + 1.2, pz - fwd.z*1.5); lampFill.intensity = st.lamp*(1 - o)*60;
       cone.position.copy(S.pos); cone.quaternion.setFromUnitVectors(V3(0, -1, 0), fwd); coneMat.uniforms.uFwd.value.copy(fwd); coneMat.uniforms.uK.value = st.lamp*0.045;
       // volumetric shafts follow the sun when it is high, else hang straight down as skylight
       sinks.forEach((s, i) => { const Dn = V3(0, -1, 0).lerp(env.sunDir.clone().negate(), sunHigh*0.75).normalize(), L = (CAVE_SURF - 2 - fl(s.x, s.z))/Math.max(0.3, -Dn.y);
         const m = beams[i]; m.quaternion.setFromUnitVectors(V3(0, -1, 0), Dn); m.scale.set(1, L, 1);
         if (!i){ motesShaft.uniforms.uSD.value.copy(Dn); motesShaft.uniforms.uSL.value = L; motesCam.uniforms.uSD.value.copy(Dn); motesCam.uniforms.uSL.value = L; } });
-      beamMat.uniforms.uK.value = dayK*(0.05 + 0.2*sunHigh)*(1 - 0.75*o); beamMat.uniforms.uCol.value.copy(sun.color).lerp(tmpC.setRGB(0.7, 0.82, 1), 0.5 - 0.3*sunHigh);
+      beamMat.uniforms.uK.value = (dayK*(0.19 + 0.02*sunHigh) + 0.03*env.night)*(1 - 0.75*o); beamMat.uniforms.uCol.value.copy(sun.color).lerp(tmpC.setRGB(0.7, 0.82, 1), 0.5 - 0.3*sunHigh);
       for (const m of [motesCam, motesShaft]){ const u = m.uniforms; u.uCam.value.copy(S.pos); u.uFwd.value.copy(fwd); u.uLamp.value = st.lamp*0.9; u.uSK.value = dayK*(0.25 + 0.75*sunHigh)*0.35; u.uSky.value.copy(beamMat.uniforms.uCol.value); }
       motesCam.uniforms.uC.value.copy(S.pos);
       // lit puffs (dust, spray) take their light from the lamp and the shaft
@@ -7833,12 +7925,12 @@ Helios.registerBiome({
       dust.material.uniforms.uSunCol.value.setRGB(1, 0.93, 0.8).multiplyScalar(lampAt(DU.x, DU.y, DU.z)*3 + 0.05 + near*dayK); dust.material.uniforms.uHemiSky.value.setRGB(0.05, 0.05, 0.06);
       DU.k = Math.max(0, DU.k - dt*0.1); dust.material.uniforms.uOpacity.value = DU.k*0.7; dust.userData.tick(t);
       spray.material.uniforms.uSunCol.value.copy(beamMat.uniforms.uCol.value).multiplyScalar(dayK*2.2 + lampAt(RP[0].x, wfBot, RP[0].z)*2); spray.material.uniforms.uOpacity.value = 0.3 + 0.35*env.rain; spray.userData.tick(t);
-      wfMat.opacity = 0.55 + 0.4*env.rain; streak.offset.y += dt*(1.3 + env.rain); wfMat.emissive.setRGB(0.05, 0.07, 0.075).multiplyScalar(0.3 + 1.5*dayK);
+      wfMat.opacity = 0.55 + 0.4*env.rain; streak.offset.y += dt*(1.3 + env.rain); wfMat.emissive.setRGB(0.05, 0.07, 0.075).multiplyScalar(0.6 + 3.2*dayK);
       // the river: flow, rain swelling it, Water strikes flooding it
       flood = Math.max(env.rain*0.7, flood - dt*0.03); riverM.position.y = flood; lakeM.position.y = lake.y + flood;
       riverMat.normalMap.offset.y -= dt*(0.35 + 0.3*env.rain); lakeMat.normalMap.offset.x += dt*0.004;
       // where am I in the network
-      if ((AC.t -= dt) < 0){ AC.t = 0.4; listen(); const c = core(px, pz); st.name = c.best < 6 ? rooms[c.best].name : links[c.best - 6].name;
+      if ((AC.t -= dt) < 0){ AC.t = 0.4; listen(); const c = core(px, pz); { const [d, e] = ray(px, py, pz, [fwd.x, fwd.y, fwd.z]); st.wall = e ? 99 : d; } st.name = c.best < 6 ? rooms[c.best].name : links[c.best - 6].name;
         if (caveAudio.ctx){ caveAudio.setRoom(AC.rt, clamp(AC.rt/8, 0.12, 0.7)*(1 - 0.6*AC.esc));
           let dr = 1e9; for (let q=0;q<RP.length;q+=3) dr = Math.min(dr, Math.hypot(RP[q].x - px, RP[q].z - pz)); const dw = Math.hypot(RP[0].x - px, RP[0].z - pz);
           caveAudio.river.gain.setTargetAtTime((0.35*smoothstep(60, 3, dr) + 0.6*smoothstep(90, 5, dw))*(1 + env.rain), caveAudio.ctx.currentTime, 0.4); }
@@ -8976,32 +9068,45 @@ Helios.registerBiome({
 const RUIN_PY = 6, RUIN_UY = -3.5;
 function ruinStoneMat(map, o, U){
   const m = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:o.rough ?? 0.88, metalness:0 });
-  const un = { uStoneMap:{ value:map }, uTexS:{ value:o.texS ?? 0.25 }, uStoneTint:{ value:new THREE.Vector3(...o.tint) }, uMossC:{ value:new THREE.Vector3(...(o.moss || [0.1, 0.17, 0.035])) } };
+  const un = { uStoneMap:{ value:map }, uStoneNrm:{ value:o.nrm || null }, uTexS:{ value:o.texS ?? 0.25 }, uStoneTint:{ value:new THREE.Vector3(...o.tint) }, uMossC:{ value:new THREE.Vector3(...(o.moss || [0.1, 0.17, 0.035])) },
+    uPyr:{ value:new THREE.Vector4(-450, 6.2, RUIN_PY, o.pyr ? 40.5 : -1) } };
+  if (o.nrm) m.defines = { RUIN_NRM:'' }; if (o.gly) m.defines = { ...(m.defines || {}), RUIN_GLY:'' };
   m.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, U, un, SU);
-    sh.vertexShader = 'varying vec3 vLP; varying vec3 vLN; varying vec3 vRWP; varying vec3 vRWN;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+    sh.vertexShader = 'varying vec3 vLP; varying vec3 vLN; varying vec3 vRWP; varying vec3 vRWN; varying vec3 vRX; varying vec3 vRY; varying vec3 vRZ;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
       #ifdef USE_INSTANCING
         mat4 rIM = instanceMatrix; vec3 rSc = vec3(length(rIM[0].xyz), length(rIM[1].xyz), length(rIM[2].xyz));
       #else
         mat4 rIM = mat4(1.0); vec3 rSc = vec3(1.0);
       #endif
       vLP = position*rSc; vLN = objectNormal;
-      vRWP = (modelMatrix*rIM*vec4(position, 1.0)).xyz; vRWN = normalize(mat3(modelMatrix)*mat3(rIM)*objectNormal);`);
-    sh.fragmentShader = 'uniform sampler2D uStoneMap; uniform float uTexS, uState, uMossK, uUnderY; uniform vec3 uStoneTint, uMossC; varying vec3 vLP; varying vec3 vLN; varying vec3 vRWP; varying vec3 vRWN;\n' + NOISE2D + SURF_GLSL + sh.fragmentShader
+      mat3 rM = mat3(modelMatrix)*mat3(rIM); vRX = normalize(rM[0]); vRY = normalize(rM[1]); vRZ = normalize(rM[2]);
+      vRWP = (modelMatrix*rIM*vec4(position, 1.0)).xyz; vRWN = normalize(rM*objectNormal);`);
+    sh.fragmentShader = 'uniform sampler2D uStoneMap, uStoneNrm; uniform float uTexS, uState, uMossK, uUnderY; uniform vec3 uStoneTint, uMossC; uniform vec4 uPyr; varying vec3 vLP; varying vec3 vLN; varying vec3 vRWP; varying vec3 vRWN; varying vec3 vRX; varying vec3 vRY; varying vec3 vRZ;\n' + NOISE2D + SURF_GLSL + sh.fragmentShader
       .replace('#include <color_fragment>', `
         vec3 rN = normalize(vLN); vec3 aw = pow(abs(rN), vec3(4.0)); aw /= (aw.x + aw.y + aw.z + 1e-4);
         vec3 tx = texture2D(uStoneMap, vLP.zy*uTexS).rgb*aw.x + texture2D(uStoneMap, vLP.xz*uTexS).rgb*aw.y + texture2D(uStoneMap, vLP.xy*uTexS).rgb*aw.z;
+        float lum = dot(tx, vec3(0.333));
+        tx = mix(tx, texture2D(uStoneMap, vec2(0.5), 12.0).rgb, 0.75*smoothstep(70.0, 200.0, length(vViewPosition)));   // far away the coursing only adds shimmer
         float n1 = tvn(vLP.xz*0.31 + vLP.y*0.53), n2 = tvn(vLP.zy*1.9 + vLP.x*1.3), n4 = tvn(vLP.xy*6.0 + vLP.z*4.0);
         float up = clamp(vRWN.y, 0.0, 1.0), above = step(uUnderY, vRWP.y);
-        vec3 stone = tx*uStoneTint;
+        vec3 stone = tx*uStoneTint*(0.8 + 0.5*dot(vColor, vec3(0.333)));   // stucco-faced cornices and stairs stay paler than the core masonry
+        float joint = 1.0 - smoothstep(0.16, 0.3, lum/max(dot(uStoneTint, vec3(0.333)), 0.3)*0.7);   // dark mortar lines of the masonry texture
         float streak = smoothstep(0.45, 0.85, tvn(vec2((vLP.x + vLP.z)*2.1, vLP.y*0.12)))*(1.0 - up);
-        vec3 aged = stone*(0.42 + 0.36*n1)*(1.0 - 0.35*streak)*vec3(0.94, 0.97, 0.88);
-        float moss = smoothstep(0.42, 0.78, 0.55*n1 + 0.3*n2 + 0.42*up + 0.12*n4 - 0.16)*uMossK*above;
+        vec3 aged = stone*(0.56 + 0.34*n1)*(1.0 - 0.35*streak)*vec3(0.95, 0.97, 0.9);
+        float moss = smoothstep(0.48, 0.8, 0.5*n1 + 0.3*n2 + 0.55*up + 0.12*n4 - 0.2 + 0.25*joint)*uMossK*above;   // moss holds on the treads and in the joints
         vec3 ruinC = mix(aged, uMossC*(0.55 + 0.6*n2), moss);
         vec3 excC = stone*(0.86 + 0.2*n1);
-        vec3 restC = vColor*(0.9 + 0.12*(n2 - 0.5) + 0.3*(dot(tx, vec3(0.333)) - 0.45));
+        #ifdef RUIN_GLY
+          vec3 restC = vColor*(0.5 + 0.75*smoothstep(0.3, 0.7, lum))*(0.95 + 0.1*n2);   // painted relief: the carving reads in the paint
+        #else
+          vec3 restC = vColor*(0.86 + 0.12*(n2 - 0.5) + 0.06*(n1 - 0.5))*(1.0 - 0.1*joint)*mix(vec3(1.0), vec3(0.74, 0.7, 0.62), up);   // lime plaster over the coursing; floors a warm lime
+          restC *= (1.0 - 0.14*streak*smoothstep(0.4, 0.9, n1))*(0.9 + 0.16*tvn(vRWP.xz*0.04 + vRWP.y*0.07));                     // rain grime under the cornices, patchy fading
+        #endif
         float rs = uState;
         vec3 rcol = rs < 1.0 ? mix(ruinC, excC, rs) : mix(excC, restC, rs - 1.0);
+        // the pyramid's risers darken into the corner with the tread below (occlusion the mesh cannot give)
+        if (max(abs(vRWP.x), abs(vRWP.z - uPyr.x)) < uPyr.w && !(abs(vRWP.x) < 7.6 && vRWP.z > uPyr.x + 9.0)){ float tf = fract((vRWP.y - uPyr.z)/uPyr.y); rcol *= mix(1.0, 0.62 + 0.38*smoothstep(0.0, 0.22, tf), 1.0 - up); }
         vec4 rA, rB; surfAt(vRWP, rA, rB);
         float rSnow = smoothstep(0.1, 0.5, rA.y)*smoothstep(0.4, 0.8, vRWN.y);
         rcol = mix(rcol, uMossC*(0.6 + 0.5*n2), smoothstep(0.08, 0.5, rB.z)*0.85*smoothstep(-0.3, 0.5, up + n1*0.6 - 0.3));
@@ -9010,8 +9115,16 @@ function ruinStoneMat(map, o, U){
         rcol = mix(rcol, vec3(0.62, 0.78, 0.86), rA.z*0.5);
         rcol = mix(rcol, vec3(0.9, 0.93, 0.97), rSnow);
         diffuseColor.rgb = rcol;`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        #ifdef RUIN_NRM
+        { vec3 sN = sign(rN), t0 = texture2D(uStoneNrm, vLP.zy*uTexS).xyz*2.0 - 1.0, t1 = texture2D(uStoneNrm, vLP.xz*uTexS).xyz*2.0 - 1.0, t2 = texture2D(uStoneNrm, vLP.xy*uTexS).xyz*2.0 - 1.0;
+          vec3 pl = normalize(aw.x*vec3(t0.z*sN.x, t0.y, t0.x) + aw.y*vec3(t1.x, t1.z*sN.y, t1.y) + aw.z*vec3(t2.x, t2.y, t2.z*sN.z));
+          vec3 pw = vRX*pl.x + vRY*pl.y + vRZ*pl.z, nw = normalize(vRWN);
+          float nk = mix(1.0, 0.35, clamp(uState - 1.0, 0.0, 1.0))*(1.0 - smoothstep(60.0, 220.0, length(vViewPosition)));
+          normal = normalize(mat3(viewMatrix)*normalize(mix(nw, pw, nk))); }
+        #endif`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-        roughnessFactor = mix(roughnessFactor, 0.72, clamp(uState - 1.0, 0.0, 1.0)); roughnessFactor = mix(roughnessFactor, 0.42, rA.x*0.8); roughnessFactor = mix(roughnessFactor, 0.15, rA.z);`)
+        roughnessFactor = mix(roughnessFactor, mix(0.72, 0.86, up), clamp(uState - 1.0, 0.0, 1.0)); roughnessFactor = mix(roughnessFactor, 0.42, rA.x*0.8); roughnessFactor = mix(roughnessFactor, 0.15, rA.z);`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         totalEmissiveRadiance += vec3(1.0, 0.3, 0.05)*rB.x*rB.x*2.0;`);
   };
@@ -9040,9 +9153,10 @@ function ruinGlyphTex(){
       default: for (let q=0;q<6;q++){ const a = q/6*TAU; g.beginPath(); g.arc(cx + Math.cos(a)*k*0.62, cy + Math.sin(a)*k*0.62, k*0.22, 0, TAU); g.stroke(); } g.beginPath(); g.arc(cx, cy, k*0.24, 0, TAU); g.fill();
     }
   }
-  const id = g.getImageData(0, 0, S, S).data, A = new Uint8Array(S*S*4);
+  const id = g.getImageData(0, 0, S, S).data, A = new Uint8Array(S*S*4), H = new Float32Array(S*S);
   for (let y=0;y<S;y++) for (let x=0;x<S;x++){ const si = ((S-1-y)*S + x)*4, h = id[si]/255, nn = 0.88 + 0.24*hash2(x*0.43, y*0.47), o = (y*S + x)*4, v = clamp((0.42 + 0.62*h)*nn, 0, 1)*255;
-    A[o] = v; A[o+1] = v; A[o+2] = v; A[o+3] = 255; }
+    A[o] = v; A[o+1] = v; A[o+2] = v; A[o+3] = 255; H[y*S + x] = h + 0.04*nn; }
+  TEXCACHE.ruinGlyphN = mkDataTex(heightNormal(H, S, 3), S, false);   // the carving's relief, for the stone shader
   return TEXCACHE.ruinGlyph = mkDataTex(A, S, true);
 }
 /* Fine limestone grain for monoliths and loose pieces */
@@ -9209,11 +9323,12 @@ Helios.registerBiome({
     group.add(terr);
 
     // ---------------- Materials ----------------
-    const masT = masonryTex('ruinWall', 41, { course:64, w:[90,230], mortar:3, a:[0.66,0.64,0.58], b:[0.8,0.77,0.7], k:5 }).map;
-    const masMat = ruinStoneMat(masT, { key:'mas', texS:0.2, tint:[0.7, 0.66, 0.58], rough:0.97 }, U);
-    const undMat = ruinStoneMat(masT, { key:'und', texS:0.2, tint:[0.7, 0.66, 0.58], rough:0.97 }, { uState:U.uState, uMossK:{ value:0 }, uUnderY:U.uUnderY });
+    const masTx = masonryTex('ruinWall', 41, { course:64, w:[90,230], mortar:3, a:[0.66,0.64,0.58], b:[0.8,0.77,0.7], k:5 }), masT = masTx.map;
+    const masMat = ruinStoneMat(masT, { key:'mas', texS:0.2, tint:[0.7, 0.66, 0.58], rough:0.97, nrm:masTx.normal, pyr:true }, U);
+    const undMat = ruinStoneMat(masT, { key:'und', texS:0.2, tint:[0.7, 0.66, 0.58], rough:0.97, nrm:masTx.normal }, { uState:U.uState, uMossK:{ value:0 }, uUnderY:U.uUnderY });
     const grainMat = ruinStoneMat(ruinGrainTex(), { key:'grain', texS:0.3, tint:[0.56, 0.54, 0.48], rough:0.97 }, U);
-    const glyMat = ruinStoneMat(ruinGlyphTex(), { key:'gly', texS:0.3, tint:[0.66, 0.62, 0.55] }, U);
+    const glyT = ruinGlyphTex(), glyMat = ruinStoneMat(glyT, { key:'gly', texS:0.3, tint:[0.66, 0.62, 0.55], gly:true, nrm:TEXCACHE.ruinGlyphN }, U);
+    const frzMat = ruinStoneMat(glyT, { key:'frz', texS:1/(4*6.2/6), tint:[0.66, 0.62, 0.55], gly:true, nrm:TEXCACHE.ruinGlyphN }, U);   // a cartouche row is a sixth of a tier
     const basMat = ruinStoneMat(ruinGrainTex(), { key:'bas', texS:0.45, tint:[0.36, 0.36, 0.34], moss:[0.08, 0.13, 0.03] }, U);
     const plain = (c, ro = 0.9, o = {}) => new THREE.MeshStandardMaterial({ color:c, roughness:ro, ...o });
     const vcol = (ro = 0.95, o = {}) => new THREE.MeshStandardMaterial({ vertexColors:true, roughness:ro, ...o });
@@ -9223,14 +9338,22 @@ Helios.registerBiome({
       g.translate(cx, (y0 + y1)/2, cz); g.computeVertexNormals(); return colored(stripAttrs(g), col); };
     const mesh = (geo, mat, cast = true) => { const m = new THREE.Mesh(geo, mat); m.castShadow = cast; m.receiveShadow = true; return m; };
     const merged = parts => { const g = mergeGeometries(parts); OWNED.push(g); parts.forEach(p => p.dispose()); return g; };
-    const RED = lin(0.62, 0.17, 0.1), CREAM = lin(0.76, 0.7, 0.58), OCHRE = lin(0.78, 0.55, 0.26), TURQ = lin(0.22, 0.56, 0.5), DARK = lin(0.3, 0.27, 0.24);
+    const RED = lin(0.6, 0.19, 0.12), CREAM = lin(0.76, 0.7, 0.58), OCHRE = lin(0.78, 0.55, 0.26), TURQ = lin(0.22, 0.56, 0.5), DARK = lin(0.3, 0.27, 0.24);
 
     // ---------------- Static architecture ----------------
     const MAS = [], GRN = [], HIGH = [], ROOF = [];
     // pyramid: basal platform split around the east passage, battered tiers with a moulded band, the stair and balustrades
     MAS.push(B(-40, 12, PY - 1, PY + TH, PZ - 40, PZ + 40, RED), B(12, 40, PY - 1, PY + TH, PZ - 40, -422, RED), B(12, 40, PY - 1, PY + TH, -418, PZ + 40, RED), B(12, 40, PY + 3, PY + TH, -422, -418, RED));
-    for (let i=1;i<8;i++){ const hs = 40 - 4.2*i, y0 = PY + TH*i;
-      MAS.push(batterBox(0, PZ, hs, hs, y0, y0 + TH - 1.3, 0.75, RED), B(-hs + 0.3, hs - 0.3, y0 + TH - 1.3, y0 + TH - 0.25, PZ - hs + 0.3, PZ + hs - 0.3, RED), B(-hs + 0.12, hs - 0.12, y0 + TH - 0.25, y0 + TH, PZ - hs + 0.1, PZ + hs - 0.1, CREAM)); }
+    // each tier: a battered talud, a carved glyph frieze framed by a projecting base moulding and pilasters, a cornice
+    const FRZ = [], FDY = 0.617;   // the frieze is built FDY low and lifted back, so its glyph rows line up with the band
+    for (let i=1;i<8;i++){ const hs = 40 - 4.2*i, y0 = PY + TH*i, fb = y0 + TH - 1.25, ft = y0 + TH - 0.25;
+      MAS.push(batterBox(0, PZ, hs, hs, y0, fb - 0.05, 0.75, RED), B(-hs + 0.12, hs - 0.12, ft, y0 + TH, PZ - hs + 0.1, PZ + hs - 0.1, CREAM));
+      MAS.push(B(-hs + 0.2, hs - 0.2, fb - 0.17, fb, PZ - hs + 0.2, PZ + hs - 0.2, CREAM));
+      FRZ.push(B(-hs + 0.3, hs - 0.3, fb - FDY, ft - FDY, PZ - hs + 0.3, PZ + hs - 0.3, TURQ));
+      const n = Math.max(2, Math.round((2*hs - 2)/4.4));
+      for (let k2=0;k2<=n;k2++){ const a = -hs + 0.9 + k2*(2*hs - 1.8)/n, e = hs - 0.16, w = 0.28;
+        if (Math.abs(a) > 7.6) MAS.push(B(a - w, a + w, fb, ft, PZ + e - 0.3, PZ + e, RED));   // the stair side
+        MAS.push(B(a - w, a + w, fb, ft, PZ - e, PZ - e + 0.3, RED), B(e - 0.3, e, fb, ft, PZ + a - w, PZ + a + w, RED), B(-e, -e + 0.3, fb, ft, PZ + a - w, PZ + a + w, RED)); } }
     for (let s=1;s<=NST;s++){ const z1 = -398 - (s - 1)*41.8/NST, z0 = z1 - 41.8/NST, top = PY + s*8*TH/NST; MAS.push(B(-6, 6, Math.max(PY - 0.5, top - 3), top, z0, z1 + (s === 1 ? 0 : 0.2), CREAM)); }
     for (const sx of [-1, 1]){ const g = new THREE.BoxGeometry(1.4, 1.2, Math.hypot(8*TH, 41.8) + 0.6); g.rotateX(Math.atan2(8*TH, 41.8)); g.translate(sx*6.7, PY + 4*TH + 0.5, -418.9); MAS.push(colored(stripAttrs(g), RED)); }
     // summit platform floor
@@ -9301,6 +9424,7 @@ Helios.registerBiome({
     const jade = mesh(new THREE.SphereGeometry(0.32, 14, 10).scale(1, 1.25, 0.6).translate(0, UY + 1.75, -423.2), plain(0x2f8a6a, 0.3, { metalness:0.1 })); group.add(jade);
     UND.push(...TOMB);
     const masMesh = mesh(merged(MAS), masMat); group.add(masMesh);
+    const frzMesh = mesh(merged(FRZ), frzMat); frzMesh.position.y = FDY; group.add(frzMesh);
     const undMesh = mesh(merged(UND), undMat); group.add(undMesh);
     const highMesh = mesh(merged(HIGH), masMat); group.add(highMesh);
     const roofMesh = mesh(merged(ROOF), vcol(1.0)); group.add(roofMesh);
