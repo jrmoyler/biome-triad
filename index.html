@@ -11031,6 +11031,7 @@ function loadBiome(id){
     OWNED.splice(0).forEach(g => g.dispose()); SCATTERS.length = 0; FLOCKS.length = 0;
     waters.length = 0;
     VU.uSeason.value.set(0, 0, 0, 0);
+    setPostOverrides(null);
     activeDef = def; active = def.build(kit); scene.add(active.group);
     Object.assign(cloudState, CLOUD_DEFAULT, def.clouds);   // a sky deck sweeping through the camera on load looks wrong
     lodTiles.length = 0; active.group.traverse(o => { if (o.userData.lodTile) lodTiles.push(o); }); VU.uLod.value = Q.lod;
@@ -11049,7 +11050,8 @@ window.__helios = { load: id => loadBiome(id), S, TOD, WX, setQuality: k => { qK
   status(){ return [active.status?.(S.lastEnv), surfaceStatus()].filter(Boolean).join(' · '); },
   relight(){ envDirty = true; envTimer = 0; },
   snap(steps=3){ for (let i=0;i<steps;i++){ last -= 1000/30; frame(last + 1000/30, true); } return canvas.toDataURL('image/jpeg', 0.92); },
-  stats(){ return PP.info; }, post(o){ activeDef.post = { ...(activeDef.post || {}), ...o }; },
+  stats(){ return PP.info; }, post: setPostOverrides,
+  postState(){ return { overrides:structuredClone(harnessPostOverrides), effective:structuredClone(resolvePostSettings()), applied:structuredClone(PP.P) }; },
   flocks(){ return FLOCKS.map(f => { const A = f.agents, n = A.length, m = [0,0,0], v = A.reduce((s, a) => s + Math.hypot(a.vx, a.vy, a.vz), 0)/n; for (const a of A){ m[0] += a.x/n; m[1] += a.y/n; m[2] += a.z/n; }
     const gy = {}; for (const a of A){ (gy[a.g] ??= []).push(a.y); }
     return { n, groupY:Object.values(gy).map(v => Math.round(v.reduce((s, y) => s + y, 0)/v.length*10)/10), mean:m.map(Math.round), speed:+v.toFixed(1), spread:Math.round(Math.sqrt(A.reduce((s, a) => s + (a.x - m[0])**2 + (a.z - m[2])**2, 0)/n)), finite:A.every(a => isFinite(a.x + a.y + a.z)) }; }); } };
@@ -11224,6 +11226,22 @@ function moveStick(e){ const r=stick.getBoundingClientRect(); let x=(e.clientX-r
    vignette, slight edge fringing, FXAA when there is no MSAA, and a blue-noise dither that hides gradient banding.
    A world tunes it with def.post or a live active.post: { bloom, thresh, shafts, ao, aoR, sat, contrast, warm, vig, tint:[r,g,b] } */
 const POST_DEFAULT = { bloom:0.5, thresh:0.88, shafts:0.3, ao:0.62, aoR:1.6, sat:1.08, contrast:0.35, warm:0, vig:0.26, tint:null, fringe:0.006, debug:0 };
+// Harness state is independent of immutable biome defaults and per-frame live settings.
+// post(null) clears all overrides; null/undefined values release individual controls.
+let harnessPostOverrides = {};
+function setPostOverrides(o){
+  if (o == null){ harnessPostOverrides = {}; return; }
+  for (const k of Object.keys(POST_DEFAULT)){
+    if (!Object.prototype.hasOwnProperty.call(o, k)) continue;
+    if (o[k] == null) delete harnessPostOverrides[k];
+    else harnessPostOverrides[k] = Array.isArray(o[k]) ? o[k].slice() : o[k];
+  }
+}
+function resolvePostSettings(out = {}){
+  const def = activeDef?.post || {}, live = active?.post || {};
+  for (const k in POST_DEFAULT) out[k] = harnessPostOverrides[k] ?? live[k] ?? def[k] ?? POST_DEFAULT[k];
+  return out;
+}
 const PP = (() => {
   const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2)), sc = new THREE.Scene();
   quad.frustumCulled = false; sc.add(quad);
@@ -11340,8 +11358,7 @@ const PP = (() => {
   const _p = new THREE.Vector3(), _f = new THREE.Vector3(), P = { ...POST_DEFAULT }, info = { triangles:0, calls:0, points:0, lines:0 };
   function render(env){
     size();
-    const def = activeDef.post || {}, live = active.post || {};
-    for (const k in POST_DEFAULT) P[k] = live[k] ?? def[k] ?? POST_DEFAULT[k];
+    resolvePostSettings(P);
     renderer.setRenderTarget(T.main); renderer.render(scene, camera);
     Object.assign(info, renderer.info.render);
     const prevAC = renderer.autoClear; renderer.autoClear = false;

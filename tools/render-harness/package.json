@@ -3,7 +3,11 @@
   "private": true,
   "type": "module",
   "description": "Headless renderer that screenshots biome views from index.html for visual verification",
-  "scripts": { "shot": "node shot.mjs" },
+  "scripts": {
+    "shot": "node shot.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "verify:post": "node verify-post.mjs"
+  },
   "dependencies": {
     "@sparticuz/chromium": "123.0.1",
     "puppeteer-core": "22.6.0",

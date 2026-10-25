@@ -479,3 +479,34 @@ legacy/                        The original GLSL ES 3.00 raymarched version this
   the effect at a distance.
 - The six newest worlds were measured in software only. At Balanced their opening views run about 0.9 to 2.3 million
   triangles (the Marsh's reed beds are the heaviest) and 58 to 280 draw calls (the Urban skyline the most).
+
+### Explicit render-harness postprocessing overrides
+
+`window.__helios.post({ bloom: 0, ao: 0 })` now writes to a separate harness
+layer. For every supported postprocessing control, precedence is **harness
+override → live world setting → biome definition → engine default**. Zero is
+an explicit value. Live updates cannot replace it, and biome definitions are
+never mutated. The quality preset still controls whether an effect is available
+(for example, AO remains unavailable at a quality level with zero AO samples).
+
+Calls merge partial overrides. `post({ bloom: null })` (or `undefined`) releases
+that control; `post(null)` clears the layer. Use `tint: [1, 1, 1]` for a neutral
+tint. Loading or reloading a biome clears the layer, and `shot.mjs` clears it
+before each job, including jobs that reuse a biome. Apply overrides after load.
+`postState()` returns detached `overrides`, resolved `effective` settings, and
+`applied` settings from the most recent rendered frame for verification.
+
+Regression checks:
+
+```sh
+node --test tools/render-harness/tests/*.test.mjs extensions/surface-state/tests/*.test.mjs
+cd tools/render-harness
+npm ci
+npm run verify:post
+```
+
+The browser check uses Chromium/SwiftShader at 640×360, balanced quality. It
+checks all 17 environments, exercises every supported control after simulation
+updates, verifies reload isolation and default restoration, and compares frozen
+scenes with bloom and AO individually disabled/enabled. Results and Caverns /
+Underwater PNG comparisons are written to `docs/post-override-evidence/`.
