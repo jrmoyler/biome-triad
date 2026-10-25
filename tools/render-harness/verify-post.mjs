@@ -39,7 +39,10 @@ const results = [];
 const errors = [];
 tab.on('pageerror', e => errors.push(e.message));
 try {
-  const ids = await tab.evaluate(() => window.__postTest.ids());
+  const allIds = await tab.evaluate(() => window.__postTest.ids());
+  const selected = process.argv.slice(2);
+  if (selected.some(id => !allIds.includes(id))) throw new Error('Unknown biome');
+  const ids = selected.length ? selected : allIds;
   for (const id of ids) {
     const result = await tab.evaluate(id => {
       const H = window.__helios, T = window.__postTest;
@@ -56,11 +59,14 @@ try {
       // Compare the identical scene/time twice, with only the tested effect changed.
       const comparisons = {};
       for (const key of ['bloom','ao']) {
+        // Fixed low threshold makes bloom legible even at the deep-water camera.
+        if (key === 'bloom') H.post({ thresh:0.25 });
         H.post({ [key]:0 }); const off = T.render();
         H.post({ [key]:1 }); const on = T.render();
         check(off !== on, `${key} had no pixel effect`);
         comparisons[key] = { off, on };
         H.post({ [key]:null });
+        if (key === 'bloom') H.post({ thresh:null });
       }
       const restored = T.render(); H.post({ bloom:0, ao:0 }); T.render(); H.post(null);
       check(T.render() === restored, 'clearing overrides did not restore identical pixels');
@@ -76,7 +82,7 @@ try {
     }
     delete result.comparisons; results.push(result);
     console.log('PASS', id);
-    fs.writeFileSync(path.join(outPrefix, 'results.json'), JSON.stringify({viewport:[w,h], quality:'balanced', renderer:'Chromium 123 / SwiftShader', results, errors}, null, 2));
+    fs.writeFileSync(path.join(outPrefix, selected.length ? 'focused-results.json' : 'results.json'), JSON.stringify({viewport:[w,h], quality:'balanced', renderer:'Chromium 123 / SwiftShader', results, errors}, null, 2));
   }
   if (errors.length) throw new Error(errors.join('\n'));
 } finally { await browser.close(); srv.close(); }

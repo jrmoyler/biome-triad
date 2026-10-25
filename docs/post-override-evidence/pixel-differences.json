@@ -1,0 +1,26 @@
+[
+  {
+    "comparison": "caverns-ao",
+    "changed_pixels_percent": 20.283,
+    "mean_absolute_rgb_difference": 0.2918,
+    "mean_rgb_change": -0.2918
+  },
+  {
+    "comparison": "caverns-bloom",
+    "changed_pixels_percent": 74.149,
+    "mean_absolute_rgb_difference": 4.8652,
+    "mean_rgb_change": 4.8652
+  },
+  {
+    "comparison": "underwater-ao",
+    "changed_pixels_percent": 44.236,
+    "mean_absolute_rgb_difference": 1.1104,
+    "mean_rgb_change": -1.1104
+  },
+  {
+    "comparison": "underwater-bloom",
+    "changed_pixels_percent": 100.0,
+    "mean_absolute_rgb_difference": 34.2844,
+    "mean_rgb_change": 34.2844
+  }
+]
