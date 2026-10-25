@@ -1985,6 +1985,80 @@ Helios.registerBiome({
 });
 
 /* ============================== SEA ============================== */
+/* Rock kit (Sea, Volcano, Savanna): a welded icosphere pushed through fracture planes, so faces read as flat broken
+   rock with crisp edges instead of noisy blobs, optionally rounded toward a cube (jointed granite) and terraced into
+   ledges. cragMat shades it in world space (instancing included): triplanar mottling, a fine bump with optional
+   vesicle pits, cavity grime, top-facing lichen or ash, a tide line, and the surface layer's wet, snow and char. */
+function cragGeo(seed, o = {}){
+  const r = rng(seed), ico = new THREE.IcosahedronGeometry(1, o.detail ?? 3), ip = ico.attributes.position, map = new Map(), P = [], I = [];
+  for (let i=0;i<ip.count;i++){ const k = Math.round(ip.getX(i)*1e4) + ',' + Math.round(ip.getY(i)*1e4) + ',' + Math.round(ip.getZ(i)*1e4);   // weld, so normals are smooth within a facet
+    let j = map.get(k); if (j === undefined){ j = P.length/3; map.set(k, j); P.push(ip.getX(i), ip.getY(i), ip.getZ(i)); } I.push(j); }
+  ico.dispose();
+  const [sx, sy, sz] = o.scale || [1, 0.75, 1], ph = r()*40, cuts = [], rn = o.round ?? 0, nz = o.noise ?? 0.18, base = o.base ?? -0.35;
+  for (let i=0;i<(o.cuts ?? 9);i++){ const a = r()*TAU, e = i === 0 && o.flatTop ? Math.PI/2 : (r() - (o.vert ? 0.5 : 0.25))*(o.vert ? 0.5 : 1.8), n = V3(Math.cos(a)*Math.cos(e), Math.sin(e), Math.sin(a)*Math.cos(e));
+    cuts.push([n, (o.cut ?? [0.6, 0.9])[0] + r()*((o.cut ?? [0.6, 0.9])[1] - (o.cut ?? [0.6, 0.9])[0]), Math.hypot(n.x*sx, n.y*sy, n.z*sz)]); }
+  const K = new Float32Array(P.length/3), v = V3();
+  for (let i=0;i<P.length/3;i++){
+    v.set(P[i*3], P[i*3+1], P[i*3+2]);
+    if (rn > 0){ const e = 2 + rn*4; v.divideScalar(Math.pow(Math.abs(v.x)**e + Math.abs(v.y)**e + Math.abs(v.z)**e, 1/e)); }
+    v.x *= sx; v.y *= sy; v.z *= sz;
+    const k = 1 + nz*fbm(v.x*1.3 + ph, v.z*1.3 + v.y*1.1, 4) + (o.ridge ?? 0.05)*ridged(v.x*4 + ph, v.z*4 + v.y*3.3, 3); v.multiplyScalar(k); K[i] = k;
+    for (const [n, d, ext] of cuts){ const dd = v.dot(n) - d*ext; if (dd > 0) v.addScaledVector(n, -dd*(o.sharp ?? 1)); }
+    if (o.strata){ const t = v.y*o.bands + ph, f = t - Math.floor(t), y2 = (Math.floor(t) + smoothstep(0.2, 0.8, f) - ph)/o.bands, lip = 1 - 0.07*o.strata*smoothstep(0.55, 0.9, f);
+      v.y = lerp(v.y, y2, o.strata); v.x *= lip; v.z *= lip; }
+    if (o.lean) v.x += o.lean*Math.max(0, v.y)**2;
+    if (o.taper){ const t = 1 + o.taper*clamp(-v.y/sy, -0.6, 1); v.x *= t; v.z *= t; }
+    if (v.y < base*sy) v.y = base*sy + (v.y - base*sy)*0.15;
+    P[i*3] = v.x; P[i*3+1] = v.y; P[i*3+2] = v.z;
+  }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setIndex(I); g.computeVertexNormals();
+  const N = g.attributes.normal, col = new Float32Array(P.length), lo = lin(...(o.dark || [0.25, 0.23, 0.21])), hi = lin(...(o.lit || [0.52, 0.49, 0.45])), top = o.top ? lin(...o.top) : null;
+  for (let i=0;i<P.length/3;i++){ const x = P[i*3], y = P[i*3+1], z = P[i*3+2];
+    const m = 0.5 + 0.5*perlin(x*2.2 + ph, z*2.2 + y*1.7), cav = 0.62 + 0.38*smoothstep(0.88, 1.08, K[i]), ao = lerp(0.5, 1, smoothstep(base*sy, sy*0.5, y));
+    const streak = 0.84 + 0.16*perlin(Math.atan2(z, x)*4 + ph, y*0.9/sy), tp = top ? smoothstep(0.55, 0.85, N.getY(i))*smoothstep(0.35, 0.7, 0.5 + 0.5*perlin(x*1.6 - ph, z*1.6))*(o.topK ?? 1) : 0;
+    for (let j=0;j<3;j++) col[i*3+j] = lerp(lerp(lo[j], hi[j], m)*cav*ao*streak, top ? top[j] : 0, tp); }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3)); g.computeBoundingSphere(); OWNED.push(g);
+  return g;
+}
+function cragMat(o = {}){
+  const U = { uCG:{ value:new THREE.Vector4(o.grain ?? 1.2, o.bump ?? 1, o.pits ?? 0, o.tide ?? -99) }, uCL:{ value:new THREE.Vector4(...lin(...(o.lichen || [0.5, 0.5, 0.45])), o.lichenK ?? 0) }, ...SU };
+  const m = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:o.roughness ?? 0.88, metalness:0, envMapIntensity:0.7 });
+  m.onBeforeCompile = function(sh){ Object.assign(sh.uniforms, U); const far = this.userData.far; if (far) sh.uniforms.uFar = far;   // streamed by scatter(): shrink out at its radius
+    sh.vertexShader = (far ? 'uniform float uFar;\n' : '') + 'varying vec3 vCW, vCN;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+      vec4 cw = vec4(transformed, 1.0); vec3 cn = objectNormal;
+      #ifdef USE_INSTANCING
+        ${far ? 'transformed *= 1.0 - smoothstep(uFar - 14.0, uFar, distance((modelMatrix*vec4(instanceMatrix[3].xyz, 1.0)).xyz, cameraPosition)); cw = vec4(transformed, 1.0);' : ''}
+        cw = instanceMatrix*cw; cn = mat3(instanceMatrix)*cn;
+      #endif
+      vCW = (modelMatrix*cw).xyz; vCN = normalize(mat3(modelMatrix)*cn);`);
+    sh.fragmentShader = 'uniform vec4 uCG, uCL; varying vec3 vCW, vCN;\n' + NOISE2D + SURF_GLSL + `
+      float cTri(vec3 p, vec3 w){ return tvn(p.zy)*w.x + tvn(p.xz)*w.y + tvn(p.xy)*w.z; }
+      float cHt(vec3 p, vec3 w){ p *= uCG.x; float h = 0.55*cTri(p, w) + 0.3*cTri(p*3.7 + 5.0, w) + 0.15*cTri(p*11.0 + 9.0, w);
+        return h - uCG.z*smoothstep(0.62, 0.9, cTri(p*6.3 + 2.0, w)); }\n` + sh.fragmentShader
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        vec3 cnw = normalize(vCN), cw3 = pow(abs(cnw), vec3(4.0)); cw3 /= cw3.x + cw3.y + cw3.z;
+        float cm = cTri(vCW*0.18, cw3), cf = cTri(vCW*uCG.x*2.0 + 3.0, cw3);
+        diffuseColor.rgb *= (0.72 + 0.56*cm)*(0.86 + 0.28*cf);
+        diffuseColor.rgb = mix(diffuseColor.rgb, uCL.rgb*(0.8 + 0.4*cf), uCL.w*smoothstep(0.5, 0.85, cnw.y)*smoothstep(0.45, 0.65, cm + 0.25*cf));
+        float tide = 1.0 - smoothstep(uCG.w - 0.2, uCG.w + 0.25, vCW.y);
+        diffuseColor.rgb *= 1.0 - 0.45*tide; diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.55, 0.53, 0.48), smoothstep(0.35, 0.0, abs(vCW.y - uCG.w - 0.55))*0.35*smoothstep(0.4, 0.7, cf));
+        vec4 sA, sB; surfAt(vCW, sA, sB);
+        diffuseColor.rgb *= 1.0 - 0.38*sA.x;
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.04, 0.035, 0.03), smoothstep(0.04, 0.55, sA.w)*0.85);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9, 0.93, 0.97), smoothstep(0.06, 0.5, sA.y + (cf - 0.5)*0.2)*smoothstep(0.35, 0.8, cnw.y));`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        roughnessFactor = mix(roughnessFactor, 0.3, max(tide, min(sA.x, 0.7)));`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        { float fd = 1.0 - smoothstep(25.0, 110.0, length(vViewPosition));
+          if (fd > 0.0){ float e = 0.035/uCG.x, h0 = cHt(vCW, cw3);
+            vec3 gr = vec3(cHt(vCW + vec3(e, 0.0, 0.0), cw3) - h0, cHt(vCW + vec3(0.0, e, 0.0), cw3) - h0, cHt(vCW + vec3(0.0, 0.0, e), cw3) - h0)/e;
+            vec3 nw = normalize(cnw - (gr - dot(gr, cnw)*cnw)*0.05*uCG.y*fd/uCG.x);
+            normal = normalize(mat3(viewMatrix)*nw); } }`);
+  };
+  m.customProgramCacheKey = function(){ return 'crag1' + (this.userData.far ? 'f' : ''); };
+  return m;
+}
+
 Helios.registerBiome({
   id:'sea', label:'Sea', bounds:[-150,-900,1900], climate:{ temp:27, night:3 }, surface:{ humidity:0.75 },
   clouds:{ cover:0.44, base:1200, top:2700, cirrus:0.3 },
@@ -1995,42 +2069,67 @@ Helios.registerBiome({
   build(k){
     const { noise:{fbm,ridged,perlin,hash2}, rng, smoothstep, lerp, srgb, flora, lin, scatter, plantMat, bladeClump, fernPlant, broadleafPlant, boulderGeo } = k;
     const isl = [ {x:-260,z:-720,r:250,h:130}, {x:430,z:-1250,r:340,h:190}, {x:-950,z:-1650,r:430,h:95}, {x:170,z:-430,r:70,h:12}, {x:-560,z:-360,r:110,h:40} ];
+    // Coast: each island's rim alternates between sea-cliff headlands and coves with a gently shelving beach
+    const cliffK = (I, x, z) => { const a = Math.atan2(z - I.z, x - I.x); return smoothstep(-0.06, 0.16, perlin(Math.cos(a)*1.4 + I.x*0.013, Math.sin(a)*1.4 + I.z*0.013) + 0.12*perlin(a*5, I.r)); };
+    const rimD = (I, x, z) => { const a = Math.atan2(z - I.z, x - I.x); return Math.hypot(x-I.x, z-I.z)/(I.r*(1 + 0.16*perlin(Math.cos(a)*1.1 + I.z*0.01, Math.sin(a)*1.1 + I.x*0.01) + 0.05*perlin(Math.cos(a)*3.3, Math.sin(a)*3.3 + I.r))); };   // bays and points
+    const coast = (x,z) => { let b = null, bd = 9; for (const I of isl){ const d = rimD(I, x, z); if (d < bd){ bd = d; b = I; } } return { I:b, d:bd, cl:b ? cliffK(b, x, z) : 0 }; };
     const heightAt = (x,z) => {
       let h = -24 + fbm(x*0.002, z*0.002, 4)*8;
       for (const I of isl){
-        const d = Math.hypot(x-I.x, z-I.z)/I.r; if (d > 1.8) continue;
-        const shelf = -24 + 26.5*smoothstep(1.8, 0.96, d);
-        const peak = I.h*Math.pow(Math.max(0,1-d),1.45)*(0.65+0.7*ridged(x*0.006+I.x*0.01, z*0.006, 4));
+        if (Math.hypot(x-I.x, z-I.z) > I.r*2.2) continue; const d = rimD(I, x, z); if (d > 1.8) continue;
+        const cl = cliffK(I, x, z), cH = Math.min(7 + 0.18*I.h, I.r*0.15), jag = 0.03*perlin(x*0.05, z*0.05) + 0.015*ridged(x*0.13, z*0.13, 2);
+        const shelf = -24 + 21.5*smoothstep(1.8, 1.05, d) + 5.9*(1 - cl)*smoothstep(1.05, 0.84, d)
+          + cl*(1.3*smoothstep(1.12, 1.0, d) + cH*smoothstep(0.985, 0.93, d + jag));   // wave-cut platform, then the cliff
+        const peak = I.h*Math.pow(Math.max(0, 1 - d/0.93), 1.4)*(0.65+0.7*ridged(x*0.006+I.x*0.01, z*0.006, 4));
         let hh = Math.max(h, shelf + peak);
-        if (hh > 0.5) hh += (fbm(x*0.016, z*0.016, 3)*3.6 + ridged(x*0.011, z*0.011, 3)*2.4)*smoothstep(0.5, 8, hh);   // dunes, hummocks and outcrops
+        if (hh > 0.5) hh += (fbm(x*0.016, z*0.016, 3)*3.6 + ridged(x*0.011, z*0.011, 3)*2.4)*smoothstep(0.5, 8, hh)*(1 - 0.6*cl*smoothstep(0.9, 1.0, d));   // dunes, hummocks and outcrops
+        if (hh > 3.5) hh += 1.8*ridged(x*0.045, z*0.045, 2)*smoothstep(3.5, 12, hh);   // rocky knolls under the forest
         h = hh;
       }
       return h;
     };
     const group = new THREE.Group();
     group.add(makeTerrain({ size:4200, cz:-800, seg:520, height:heightAt, apron:{ size:12000, seg:120 }, detail:{ rock:[0.5,0.44,0.37], rockLo:0.3, bump:14, ripple:0.9, wet:0.8, foam:1, caustic:1 }, color:(c,x,y,z,ny)=>{
-      const n=0.5+0.5*perlin(x*0.03,z*0.03), m=0.5+0.5*perlin(x*0.11,z*0.11);
-      if (y < -0.6){ const t=smoothstep(-0.6,-20,y); return srgb(c, lerp(0.88,0.12,t), lerp(0.82,0.3,t), lerp(0.66,0.34,t)); }
-      if (y < 3.0 + 0.8*n) return srgb(c, 0.9-0.04*m,0.82-0.04*m,0.64-0.05*m);
-      if (ny < 0.72) { const q=0.5+0.5*perlin(x*0.04,y*0.08); return srgb(c, 0.30+0.08*q,0.27+0.06*q,0.24+0.05*q); }
+      const n=0.5+0.5*perlin(x*0.03,z*0.03), m=0.5+0.5*perlin(x*0.11,z*0.11), C = coast(x,z), rocky = C.cl*smoothstep(1.16, 1.0, C.d);
+      if (ny < 0.72 || (rocky > 0.45 && y < 2.5 && y > -4)) { const q=0.5+0.5*perlin(x*0.04,y*0.08), b=smoothstep(0.3, 0.7, 0.5+0.5*Math.sin(y*0.9 + 2*perlin(x*0.02, z*0.02))), wt = smoothstep(1.2, -0.5, y);   // layered tuff cliffs, dark and weedy at the tide line
+        return srgb(c, lerp(0.24+0.1*q+0.12*b, 0.1, wt), lerp(0.21+0.08*q+0.1*b, 0.11, wt), lerp(0.18+0.06*q+0.07*b, 0.08, wt)); }
+      if (y < -0.6){ const t=smoothstep(-0.6,-20,y); return srgb(c, lerp(0.8,0.12,t), lerp(0.72,0.3,t), lerp(0.56,0.34,t)); }
+      if (y < 0.55) return srgb(c, 0.6-0.04*m, 0.52-0.04*m, 0.4-0.04*m);   // wet swash zone
+      if (y < 3.0 + 0.8*n){ const wr = smoothstep(0.35, 0.0, Math.abs(y - 1.15 - 0.25*m))*smoothstep(0.35, 0.65, perlin(x*0.09, z*0.09) + 0.5);   // dry sand with a wrack line of weed and shell at the high-tide mark
+        const d = smoothstep(0.55, 2.2, y); return srgb(c, lerp(lerp(0.7, 0.9, d) - 0.05*m, 0.36, wr), lerp(lerp(0.62, 0.81, d) - 0.05*m, 0.31, wr), lerp(lerp(0.48, 0.63, d) - 0.06*m, 0.22, wr)); }
       const gT = smoothstep(2.2, 3.9, y + 1.2*n), pt = 0.5+0.5*perlin(x*0.012+7, z*0.012), dry = smoothstep(0.55, 0.8, 0.5+0.5*perlin(x*0.02, z*0.02+3));
-      const gr = [lerp(0.15,0.3,pt) + 0.1*dry, lerp(0.3,0.42,pt) - 0.04*dry, lerp(0.09,0.12,pt)];
-      return srgb(c, lerp(0.74,gr[0]+0.05*n,gT), lerp(0.68,gr[1]+0.06*n,gT), lerp(0.5,gr[2],gT));
+      const lit = smoothstep(9, 22, y)*(0.5 + 0.5*m);   // grass by the shore, leaf litter and red earth under the forest
+      const gr = [lerp(lerp(0.13,0.24,pt) + 0.16*dry, 0.27, lit*0.6), lerp(lerp(0.24,0.31,pt) + 0.05*dry, 0.2, lit*0.6), lerp(lerp(0.07,0.1,pt) + 0.07*dry, 0.12, lit*0.6)];
+      return srgb(c, lerp(0.74,gr[0]+0.04*n,gT), lerp(0.68,gr[1]+0.04*n,gT), lerp(0.5,gr[2],gT));
     }}));
     group.add(makeWater({ size:12000, cz:-800, color:0x0b5566, distortion:3.6, scale:1.6, alpha:0.72 }));
 
-    const R=rng(31), palms=palmSet('coconut'), F=k.forest(), stacks=[];
+    const R=rng(31), palms=palmSet('coconut'), F=k.forest(), stacks=[], crags=[];
+    const tint = () => new THREE.Color(0.85+R()*0.3, 0.9+R()*0.2, 0.8+R()*0.3);
     for (const I of isl){
-      const nJ = Math.round(I.r*I.r/52*Math.max(0.5,Q.density)), nP = Math.round(I.r*3.2*Q.density);
-      for (let i=0;i<nJ;i++){ const a=R()*TAU, d=Math.sqrt(R())*I.r*0.95, x=I.x+Math.cos(a)*d, z=I.z+Math.sin(a)*d, h=heightAt(x,z); if (h<6 || h>I.h*0.75) continue; F.add(R()<0.8?'island':'canopyB', x, h-0.4, z, 0.7+R()*0.5, R()*TAU, new THREE.Color(0.85+R()*0.3, 0.9+R()*0.2, 0.8+R()*0.3)); if (R()<0.55) F.add('shrub', x+(R()-0.5)*8, h-0.2, z+(R()-0.5)*8, 0.8+R()*0.7, R()*TAU, new THREE.Color(0.85+R()*0.3, 0.9+R()*0.2, 0.8+R()*0.3)); }
-      for (let i=0;i<nP;i++){ const a=R()*TAU, d=I.r*(0.88+R()*0.22), x=I.x+Math.cos(a)*d, z=I.z+Math.sin(a)*d, h=heightAt(x,z); if (h<2.4 || h>9) continue; flora.pushPalm(palms, x, h, z, 8+R()*8, R, new THREE.Color(0.9+R()*0.2,0.95+R()*0.1,0.85+R()*0.2)); }
+      const nJ = Math.round(I.r*I.r/52*Math.max(0.5,Q.density)), nP = Math.round(I.r*4*Q.density);
+      // forest thins to grassy clearings and wind-cropped ridges, and gives way to rock on the cliff tops and the peak
+      for (let i=0;i<nJ;i++){ const a=R()*TAU, d=Math.sqrt(R())*I.r*0.95, x=I.x+Math.cos(a)*d, z=I.z+Math.sin(a)*d, h=heightAt(x,z), cl=cliffK(I,x,z);
+        if (h<6 || h>I.h*0.78 || (cl > 0.5 && d > I.r*0.85) || R() < smoothstep(0.12, 0.32, perlin(x*0.011 + I.x, z*0.011)) || R() < smoothstep(0.55, 0.78, h/I.h)) continue;
+        const sp = R(); F.add(sp<0.62?'island':sp<0.82?'canopyB':'cecropia', x, h-0.4, z, 0.7+R()*0.5, R()*TAU, tint()); if (R()<0.55) F.add('shrub', x+(R()-0.5)*8, heightAt(x,z)-0.2, z+(R()-0.5)*8, 0.8+R()*0.7, R()*TAU, tint()); }
+      for (let i=0;i<nP;i++){ const a=R()*TAU, d=I.r*(0.74+R()*0.22), x=I.x+Math.cos(a)*d, z=I.z+Math.sin(a)*d, h=heightAt(x,z); if (h<2.4 || h>14 || cliffK(I,x,z) > 0.55) continue; flora.pushPalm(palms, x, h, z, 8+R()*9, R, new THREE.Color(0.9+R()*0.2,0.95+R()*0.1,0.85+R()*0.2)); }
       for (let i=0;i<Math.round(I.r*0.025);i++){ const a=R()*TAU, d=I.r*(1.05+R()*0.5), x=I.x+Math.cos(a)*d, z=I.z+Math.sin(a)*d, w=4.5+R()*5; stacks.push({ p:new THREE.Vector3(x,-7,z), s:new THREE.Vector3(w, 16+R()*R()*26, w*(0.7+R()*0.6)), ry:R()*TAU }); }
+      // headlands: fallen blocks and ledges along the cliff foot and lip, skerries off the point; outcrops near the summit
+      const cH = Math.min(7 + 0.18*I.h, I.r*0.15);
+      for (let i=0;i<Math.round(I.r*0.6);i++){ const a=R()*TAU, d=(0.9+R()*0.16)/rimD(I, I.x+Math.cos(a), I.z+Math.sin(a)), x=I.x+Math.cos(a)*d, z=I.z+Math.sin(a)*d, cl=cliffK(I,x,z); if (cl < 0.35 + 0.4*R()) continue;   // along the true (irregular) rim
+        const y=heightAt(x,z), s=(0.25+R()*R()*0.6)*cH*(0.5 + cl); crags.push({ p:new THREE.Vector3(x, Math.max(y, -2.5) - s*0.3, z), s:new THREE.Vector3(s*(0.8+R()*0.6), s*(0.6+R()*0.7), s*(0.8+R()*0.6)), ry:R()*TAU, rx:(R()-0.5)*0.3, c:new THREE.Color().setScalar(0.85+R()*0.3) }); }
+      for (let i=0;i<Math.round(I.r*0.06);i++){ const a=R()*TAU, d=Math.sqrt(R())*I.r*0.45, x=I.x+Math.cos(a)*d, z=I.z+Math.sin(a)*d, y=heightAt(x,z); if (y < I.h*0.45) continue;
+        const s=5+R()*10; crags.push({ p:new THREE.Vector3(x, y - s*0.35, z), s:new THREE.Vector3(s, s*(0.7+R()*0.8), s*(0.8+R()*0.5)), ry:R()*TAU, c:new THREE.Color().setScalar(0.9+R()*0.2) }); }
     }
     for (let i=0;i<6;i++){ const w=4+R()*5; stacks.push({ p:new THREE.Vector3(-80+R()*260,-6,-420-R()*200), s:new THREE.Vector3(w, 14+R()*18, w*(0.8+R()*0.4)), ry:R()*TAU }); }
     group.add(F.build());
     group.add(flora.palms(palms));
-    const stackMat = new THREE.MeshStandardMaterial({ vertexColors:true, map:tex.ground, roughness:0.9 }), stGeo = [stackGeo(1), stackGeo(2), stackGeo(3)], stL = stGeo.map(() => []);
-    stacks.forEach(q => stL[(R()*3)|0].push(q)); stGeo.forEach((g,i) => group.add(instTiled(g, stackMat, stL[i], { tile:400 })));
+    // sea stacks and headland blocks: layered tuff, notched and dark below the tide line, scrub on the caps
+    const seaRock = cragMat({ grain:0.9, bump:1.2, tide:0.5, lichen:[0.6,0.58,0.48], lichenK:0.35 }), stRock = { scale:[1, 3, 0.9], cuts:12, vert:true, cut:[0.45, 0.8], strata:0.6, bands:2.2, noise:0.2, ridge:0.12, taper:0.45, dark:[0.3,0.27,0.23], lit:[0.6,0.54,0.46], top:[0.18,0.3,0.1], topK:0.9, base:-0.9 };
+    const stGeo = [cragGeo(1, { ...stRock, detail:4 }), cragGeo(2, { ...stRock, detail:4, lean:0.05 }), cragGeo(3, { ...stRock, detail:4, scale:[1.1, 2.4, 1] })], stL = stGeo.map(() => []);
+    stacks.forEach(q => { q.p.y += 0.47*q.s.y; q.s.multiply(V3(0.9, 0.175, 0.85)); stL[(R()*3)|0].push(q); }); stGeo.forEach((g,i) => group.add(instTiled(g, seaRock, stL[i], { tile:900 })));
+    const hdGeo = [cragGeo(11, { cuts:15, cut:[0.3, 0.75], strata:0.45, bands:2.5, dark:[0.2,0.18,0.15], lit:[0.44,0.39,0.33], top:[0.2,0.3,0.12], topK:0.6 }), cragGeo(12, { detail:2, cuts:12, cut:[0.3, 0.75], flatTop:true, dark:[0.2,0.19,0.17], lit:[0.42,0.39,0.35], top:[0.22,0.32,0.12], topK:0.5 })], hdL = hdGeo.map(() => []);
+    crags.forEach(q => hdL[(R()*2)|0].push(q)); hdGeo.forEach((g,i) => group.add(instTiled(g, seaRock, hdL[i], { tile:900 })));
 
     // ---- Reef, seagrass, beach and jungle-floor cover
     const sc = [];
@@ -2048,8 +2147,8 @@ Helios.registerBiome({
     const jMat = plantMat({ wind:0.03, back:0.8 });
     sc.push(scatter({ geo:fG, mat:jMat, tile:24, radius:60, per:0.07, seed:72, place:(x,z,r)=>{ const y=heightAt(x,z); if (y<6.5 || y>110 || r()>0.8) return null; return { y:y-0.05, s:0.7+r()*0.7, c:new THREE.Color(0.8+r()*0.4, 0.9+r()*0.2, 0.7+r()*0.3) }; } }));
     sc.push(scatter({ geo:bG, mat:jMat, tile:24, radius:60, per:0.035, seed:73, place:(x,z,r)=>{ const y=heightAt(x,z); if (y<6.5 || y>90 || r()>0.8) return null; return { y:y-0.05, s:0.7+r()*0.7, c:new THREE.Color(0.8+r()*0.4, 0.9+r()*0.2, 0.7+r()*0.3) }; } }));
-    const rockMat = plantMat({ wind:0, back:0, rock:true, map:tex.ground, roughness:0.88 });
-    [boulderGeo(91,3), boulderGeo(92,3), boulderGeo(93,3)].forEach((g,i) => sc.push(scatter({ geo:g, mat:rockMat, tile:48, radius:200, per:0.0022, seed:90+i, shadow:true, place:(x,z,r)=>{ const y=heightAt(x,z), n=nearIsland(x,z); if (y>3.4 || y<-6 || n>1.3 || n<0.5) return null; const s=0.7+r()*r()*3.4; return { y:y-s*0.25, s, sy:s*(0.55+r()*0.5), c:new THREE.Color(1.35+r()*0.4, 1.3+r()*0.38, 1.2+r()*0.35) }; } })));
+    const rockMat = cragMat({ grain:1.4, bump:1.1, tide:0.45, lichen:[0.7,0.68,0.58], lichenK:0.4 });   // beach and reef boulders: rounded by the surf, wet and dark below the tide line
+    [cragGeo(91, { round:0.5, cuts:5, sharp:0.6, noise:0.12 }), cragGeo(92, { cuts:8, dark:[0.22,0.21,0.2], lit:[0.46,0.44,0.41] }), cragGeo(93, { round:0.3, cuts:6, sharp:0.8, scale:[1.2,0.6,0.9], dark:[0.3,0.27,0.23], lit:[0.6,0.55,0.47] })].forEach((g,i) => sc.push(scatter({ geo:g, mat:rockMat, tile:48, radius:200, per:0.0022, seed:90+i, shadow:true, place:(x,z,r)=>{ const y=heightAt(x,z), n=nearIsland(x,z); if (y>3.4 || y<-6 || n>1.3 || n<0.5) return null; const C=coast(x,z); if (r() > 0.35 + 0.65*C.cl) return null; const s=0.7+r()*r()*3.4; return { y:y-s*0.25, s, sy:s*(0.55+r()*0.5), c:new THREE.Color().setScalar(0.85+r()*0.3) }; } })));
     const lG = logGeo(5), lMat = plantMat({ wind:0, back:0, rock:true, map:tex.bark, roughness:0.95 });
     sc.push(scatter({ geo:lG, mat:lMat, tile:48, radius:120, per:0.0008, seed:95, place:(x,z,r)=>{ const y=heightAt(x,z); if (y<1.3 || y>3.6) return null; return { y:y+0.1, s:0.8+r()*1.2, ry:r()*TAU }; } }));
     sc.forEach(o => group.add(o.group));
@@ -2535,8 +2634,8 @@ function lavaMaterial(o = {}){
       .replace('#include <color_fragment>', `#include <color_fragment>
         vec2 fl = vLuv*uScale - vec2(0.0, uT.x*uFlow);
         float edge = abs(vLuv.x - 0.5)*2.0;
-        float cr = tfbm(fl*1.6 + vec2(tvn(fl*0.5)*1.5, 0.0)) + 0.34*edge*edge - 0.04*sin(uT.x*0.6 + fl.y*2.0);
-        float crust = smoothstep(0.44, 0.54, cr);
+        float cr = tfbm(fl*1.6 + vec2(tvn(fl*0.5)*1.5, 0.0)) + 0.34*edge*edge + 0.6*smoothstep(0.72, 0.97, edge + 0.12*tvn(fl*3.0)) - 0.04*sin(uT.x*0.6 + fl.y*2.0);
+        float crust = smoothstep(0.37, 0.47, cr);
         float heat = (1.0 - crust) * (0.45 + 0.55*tvn(fl*5.0 + uT.x*0.3));
         diffuseColor.rgb = mix(vec3(0.3, 0.07, 0.02), vec3(0.035, 0.03, 0.028)*(0.75 + 0.5*tvn(fl*9.0)), crust);`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n        roughnessFactor = mix(0.35, 0.9, crust);')
@@ -2546,21 +2645,24 @@ function lavaMaterial(o = {}){
   m.customProgramCacheKey = () => 'lava';
   return m;
 }
-/* Columnar basalt: a hex-packed cluster of jointed prisms stepping up toward its centre, bevelled caps */
-function basaltGeo(seed){
-  const r = rng(seed), P = [], N = [], C = [], cs = 0.85, R = 5, dark = lin(0.12,0.11,0.11), lite = lin(0.32,0.3,0.29);
+/* Basalt colonnade: a hex-packed block of jointed columns (a flow's cooled core, exposed where the wall has broken
+   away), tallest at the back where it runs into the slope and stepping down in broken stumps toward the front (-z) */
+function volcColonnadeGeo(seed){
+  const r = rng(seed), P = [], N = [], C = [], cs = 0.62, dark = lin(0.2,0.19,0.18), lite = lin(0.36,0.35,0.33), ash = lin(0.48,0.46,0.43), H0 = 9 + r()*6, nq = 18, ns = 8;
   const tri = (a, b, c, col) => { const n = V3().subVectors(b, a).cross(V3().subVectors(c, a)).normalize(); for (const v of [a, b, c]){ P.push(v.x, v.y, v.z); N.push(n.x, n.y, n.z); C.push(col[0], col[1], col[2]); } };
-  for (let q=-R;q<=R;q++) for (let s=Math.max(-R, -q-R); s<=Math.min(R, -q+R); s++){
-    const cx = cs*1.5*q, cz = cs*Math.sqrt(3)*(s + q/2), d = Math.hypot(cx, cz)/(cs*1.6*R);
-    if (d > 1 || r() < 0.07) continue;
-    const H = (1.5 + 7*Math.pow(1 - d, 0.8))*(0.7 + 0.5*r()), t0 = (r()-0.5)*0.3, t1 = (r()-0.5)*0.3, tone = 0.75 + 0.5*r(), w = cs*(0.94 + 0.04*r());
-    const ring = (y, k) => [...Array(6)].map((_, i) => { const a = i/6*TAU + Math.PI/6, ca = Math.cos(a), sa = Math.sin(a); return V3(cx + ca*w*k, y + (t0*ca + t1*sa)*w, cz + sa*w*k); });
-    const bot = ring(-1.5, 1), top = ring(H, 1), cap = ring(H + 0.12, 0.84), ctr = V3(cx, H + 0.16, cz);
-    const sc = [dark[0]*tone, dark[1]*tone, dark[2]*tone], tc = [lite[0]*tone, lite[1]*tone, lite[2]*tone];
-    for (let i=0;i<6;i++){ const j = (i+1)%6, st = 0.85 + 0.3*r(), c2 = [sc[0]*st, sc[1]*st, sc[2]*st];
-      tri(bot[i], top[i], bot[j], c2); tri(bot[j], top[i], top[j], c2);
-      tri(top[i], cap[i], top[j], tc); tri(top[j], cap[i], cap[j], tc);
-      tri(ctr, cap[j], cap[i], tc); }
+  for (let q=0; q<nq; q++) for (let s=0; s<ns; s++){
+    const cx = (q - nq/2 + (s & 1)*0.5)*cs*1.74, cz = -s*cs*1.51 + 0.002*cx*cx, u = Math.abs(q - nq/2)/(nq/2), dep = s/(ns - 1);
+    let H = H0*(1 - 0.55*u*u)*(1 - 0.8*Math.pow(dep, 1.2))*(0.88 + 0.2*r()) + 0.6*perlin(q*0.4 + seed, s*0.4); if (r() < 0.07) H *= 0.55;
+    if (H < 0.4 || (u > 0.75 && r() < (u - 0.75)*3)) continue;
+    const w = cs*(0.97 + 0.04*r()), tone = 0.75 + 0.45*r(), lean = (r() - 0.5)*0.04, top = H;
+    const ring = (y, k) => [...Array(6)].map((_, i) => { const an = i/6*TAU, ca = Math.cos(an), sa = Math.sin(an); return V3(cx + ca*w*k + lean*y, y + (y > 0.5 ? (ca*0.3 - sa*0.2)*w*(0.5 + r()*0.2) : 0), cz + sa*w*k); });
+    const sc = dark.map(c => c*tone);
+    let y0 = -2, prev = ring(y0, 1);
+    while (y0 < top - 0.05){ const y1 = Math.min(top, y0 + 1.2 + r()*2.5), cur = ring(y1, 0.98 + r()*0.04), st = 0.82 + 0.3*r();   // drums split by cross-joints
+      for (let i=0;i<6;i++){ const j = (i+1)%6, c2 = sc.map((c, k) => lerp(c, ash[k], 0.25*smoothstep(H0*0.6, H0, y1))*st); tri(prev[i], cur[i], prev[j], c2); tri(prev[j], cur[i], cur[j], c2); }
+      y0 = y1; prev = cur; }
+    const ctr = V3(prev.reduce((s, v) => s + v.x, 0)/6, top + 0.1, prev.reduce((s, v) => s + v.z, 0)/6), tc = lite.map((c, k) => lerp(c*tone, ash[k], 0.5));
+    for (let i=0;i<6;i++) tri(ctr, prev[(i+1)%6], prev[i], tc);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
@@ -2584,6 +2686,7 @@ Helios.registerBiome({
   fog:{ density:0.00045, tint:[1.2,0.82,0.68] },
   ground:[0.55,0.2,0.07],
   precip:{ kind:'ash', color:0x6a6460, size:0.08, fall:0.7, sway:1.2, base:0.5, storm:0.5 },
+  post:{ bloom:0.72, thresh:0.8, contrast:0.42, warm:0.015, sat:1.05 },
   camera(){ const lx = z => 55*Math.sin(z*0.0021 + 0.5) + 22*Math.sin(z*0.0063 + 1.1); return { pos:[lx(260) + 62, 22, 260], look:[0, 520, -2300] }; },
   build(k){
     const { noise:{fbm,ridged,perlin}, rng, smoothstep, lerp, srgb, lin, scatter, plantMat, bladeClump, boulderGeo, puffField } = k;
@@ -2592,8 +2695,12 @@ Helios.registerBiome({
     const V = z => 6 + 150*smoothstep(-150, -2100, z);
     const lx = z => 55*Math.sin(z*0.0021 + 0.5) + 22*Math.sin(z*0.0063 + 1.1);
     const lw = z => lerp(7, 16 + 5*Math.sin(z*0.004), smoothstep(ZV, ZV + 260, z));
+    // valley walls: stacked lava-flow layers (cliff bands over talus ledges), scored by gullies running down the slope
     const walls = (x,z) => { const ax = Math.abs(x - lx(z)*0.4) + 60*perlin(x*0.003, z*0.003);
-      return 300*smoothstep(240, 640, ax)*(0.75 + 0.5*ridged(x*0.0045 + 3, z*0.0045, 4)) + 200*smoothstep(560, 1100, ax)*(0.6 + 0.8*ridged(x*0.0022, z*0.0022, 4)) + 45*ridged(x*0.011, z*0.011, 3)*smoothstep(260, 420, ax); };
+      let h = 300*smoothstep(240, 640, ax)*(0.75 + 0.5*ridged(x*0.0045 + 3, z*0.0045, 4)) + 200*smoothstep(560, 1100, ax)*(0.6 + 0.8*ridged(x*0.0022, z*0.0022, 4)) + 45*ridged(x*0.011, z*0.011, 3)*smoothstep(260, 420, ax);
+      const st = 24 + 8*perlin(z*0.002, 7), t = h/st + 0.6*perlin(x*0.004, z*0.004), f = t - Math.floor(t);
+      h = lerp(h, (Math.floor(t) + smoothstep(0.42, 0.68, f) - 0.6*perlin(x*0.004, z*0.004))*st, 0.7*smoothstep(10, 60, h));
+      return h - 26*Math.pow(1 - Math.abs(perlin(x*0.0035 + 2, z*0.028)), 7)*smoothstep(260, 480, ax); };
     const cone = (x,z) => { const d = Math.hypot(x-CX, z-CZ); if (d < rc) return rimH - crD*(1 - Math.pow(d/rc, 3));
       const gul = ridged(Math.atan2(z-CZ, x-CX)*9, d*0.003, 3);   // radial gullies scored into the flanks
       return CH*Math.pow(Math.max(0, 1 - d/CR), 1.55)*(1 - 0.06*gul*smoothstep(rc, rc*2, d)) + 12*Math.exp(-(((d - rc)/34)**2)); };
@@ -2615,23 +2722,24 @@ Helios.registerBiome({
     const flowField = (x,z) => flowAmt(x,z) > 0.3;
     const group = new THREE.Group();
     group.add(makeTerrain({ size:5200, cz:-900, seg:520, height:heightAt, apron:{ size:13000, seg:120 },
-      detail:{ rock:[0.15,0.13,0.12], rockLo:0.36, bump:18, ripple:0.7, wet:0, glow:2.4, glowCol:[1.0,0.26,0.04] },
-      kind:(x,y,z)=> 2*flowAmt(x,z),
+      detail:{ rock:[0.15,0.13,0.12], rockLo:0.32, bump:20, ripple:0.2, wet:0, glow:2.4, glowCol:[1.0,0.26,0.04] },
+      kind:(x,y,z)=> Math.max(2*flowAmt(x,z), z > ZV - 40 ? 1.48*smoothstep(lw(z)*2.0, lw(z)*1.3, Math.abs(x - lx(z))) : 0),   // live flow lobes and the river's crusted margins glow through cracks
       color:(c,x,y,z,ny)=>{
         const n = 0.5+0.5*perlin(x*0.02,z*0.02), m = 0.5+0.5*perlin(x*0.09,z*0.09), vd = ventD(x,z), dc = Math.hypot(x-CX, z-CZ);
         const fa = flowAmt(x,z);
         if (fa > 0.99) return srgb(c, 0.05+0.02*m, 0.045+0.02*m, 0.045+0.02*m);
         if (vd < 22){ const t = smoothstep(22, 4, vd)*(0.6 + 0.4*m); return srgb(c, lerp(0.3, 0.66, t), lerp(0.28, 0.58, t), lerp(0.25, 0.24, t)); }
         if (z > ZV - 40 && Math.abs(x - lx(z)) < lw(z)*2.4) return srgb(c, 0.07, 0.055, 0.05);
-        const ash = [0.3+0.06*n, 0.28+0.05*n, 0.27+0.05*n], scoria = [0.34+0.08*m, 0.16+0.04*m, 0.1+0.02*m], basalt = [0.12+0.04*m, 0.11+0.04*m, 0.11+0.035*m];
-        const up = smoothstep(300, 600, y)*smoothstep(CR, CR*0.4, dc), flat = smoothstep(0.7, 0.9, ny);
-        const b0 = [lerp(basalt[0], ash[0], flat), lerp(basalt[1], ash[1], flat), lerp(basalt[2], ash[2], flat)];
+        const ash = [0.25+0.07*n, 0.235+0.06*n, 0.225+0.055*n], scoria = [0.34+0.08*m, 0.16+0.04*m, 0.1+0.02*m], basalt = [0.12+0.04*m, 0.11+0.04*m, 0.11+0.035*m];
+        const wl = smoothstep(12, 70, y - V(z))*smoothstep(CR*0.7, CR, dc), up = smoothstep(300, 600, y)*smoothstep(CR, CR*0.4, dc), flat = smoothstep(lerp(0.7, 0.86, wl), lerp(0.9, 0.97, wl), ny)*(1 - 0.35*wl);   // on the walls ash lies only on the ledges
+        const old = smoothstep(0.04, 0.22, perlin(x*0.005 + 3, z*0.005 - 5) + 0.35*perlin(x*0.02, z*0.02))*smoothstep(300, 200, Math.abs(x - lx(z)*0.4)), fl = flat*(1 - 0.75*old);   // older, ash-free flow fields
+        const b0 = [lerp(basalt[0]*0.9, ash[0], fl), lerp(basalt[1]*0.9, ash[1], fl), lerp(basalt[2]*0.9, ash[2], fl)];
         const u2 = up*(0.5 + 0.5*n), r0 = lerp(b0[0], scoria[0], u2), g0 = lerp(b0[1], scoria[1], u2), bl = lerp(b0[2], scoria[2], u2);
         return srgb(c, lerp(r0, 0.05+0.02*m, fa), lerp(g0, 0.045+0.02*m, fa), lerp(bl, 0.045+0.02*m, fa));
       } }));
 
     // ---- Lava: river from the flank vent down the valley, lava lake in the crater, spatter cone at the vent
-    const lavaM = lavaMaterial({ heat:1.7, flow:0.28, scale:[2.4, 1] });
+    const lavaM = lavaMaterial({ heat:1.25, flow:0.28, scale:[2.4, 1] });
     { const P = [], U = [], I = [], cols = 18; let v = 0, prev = null;
       for (let z = ZV, row = 0; z < 2700; z += 3, row++){
         const w = lw(z)*1.08, cx = lx(z), y0 = lavaY(z);
@@ -2648,25 +2756,38 @@ Helios.registerBiome({
       m.position.set(x, lavaY(ZV) + 6, ZV - 6); m.castShadow = m.receiveShadow = true; group.add(m); }
     const glow = new THREE.PointLight(0xff5a1e, 2600, 240, 2); group.add(glow);
 
-    // ---- Rock: basalt colonnades along the valley walls, obsidian boulders, charred snags
-    const basG = [basaltGeo(1), basaltGeo(2), basaltGeo(3)], basL = basG.map(() => []);
-    for (let i=0;i<260;i++){ const z = -1800 + R()*2900, side = R() < 0.5 ? -1 : 1, x = lx(z)*0.4 + side*(170 + R()*240), y = heightAt(x,z); if (y > 320 || flowField(x,z)) continue; const s = 0.8 + R()*1.1;
-      basL[(R()*3)|0].push({ p:new THREE.Vector3(x, y - 0.8, z), s:new THREE.Vector3(s, s*(0.8 + R()*0.6), s), ry:R()*TAU }); }
+    // ---- Rock: colonnades where flows broke away from the walls, crags and buttresses of layered basalt up the slopes,
+    // low causeway pavements on the floor, aa clinker and pahoehoe slabs, charred snags
     const basMat = new THREE.MeshStandardMaterial({ vertexColors:true, map:tex.ground, roughness:0.82 });
-    basG.forEach((g,i) => group.add(instTiled(g, basMat, basL[i], { tile:300 })));
+    const colG = [volcColonnadeGeo(11), volcColonnadeGeo(12)], colL = colG.map(() => []);
+    for (let i=0;i<46;i++){ const z = -1750 + R()*2800, side = R() < 0.5 ? -1 : 1, ax = 330 + R()*120, x = lx(z)*0.4 + side*ax, y = heightAt(x,z) - 8; if (y > 300 || flowField(x,z)) continue;
+      const s = 1.4 + R()*0.8; colL[(R()*2)|0].push({ p:new THREE.Vector3(x, y - 1.5, z), s:new THREE.Vector3(s, s*(0.8 + R()*0.5), s), ry:side*Math.PI/2 + (R() - 0.5)*0.6 }); }
+    colG.forEach((g,i) => group.add(instTiled(g, basMat, colL[i], { tile:700 })));
+    const wallRock = cragMat({ grain:0.8, bump:1.3, pits:0.35, lichen:[0.44,0.42,0.4], lichenK:0.7, roughness:0.92 });   // vesicular basalt dusted with ash on its ledges
+    const crG = [cragGeo(71, { detail:3, scale:[1.7, 0.6, 1], cuts:16, cut:[0.25, 0.7], flatTop:true, strata:0.5, bands:3.2, dark:[0.15,0.14,0.13], lit:[0.36,0.34,0.31], noise:0.12 }),
+      cragGeo(72, { detail:4, scale:[1, 1.15, 0.9], cuts:16, vert:true, cut:[0.25, 0.7], strata:0.35, bands:3, dark:[0.14,0.12,0.11], lit:[0.34,0.28,0.24], ridge:0.1, taper:0.12 })], crL = crG.map(() => []);
+    for (let i=0;i<420;i++){ const z = -1850 + R()*3000, side = R() < 0.5 ? -1 : 1, ax = 300 + R()*R()*650, x = lx(z)*0.4 + side*ax, y = heightAt(x,z); if (flowField(x,z)) continue;
+      const sl = Math.abs(heightAt(x + 6, z) - heightAt(x - 6, z))/12, s = (16 + R()*R()*55)*(0.6 + 0.6*smoothstep(0.15, 0.8, sl)); if (sl < 0.15 && (y - V(z) < 15 || R() < 0.4)) continue;
+      crL[R() < 0.6 ? 0 : 1].push({ p:new THREE.Vector3(x, y - s*(0.45 + 0.6*Math.min(1, sl)), z), s:new THREE.Vector3(s*(0.8 + R()*0.5), s*(0.6 + R()*0.6), s*(0.8 + R()*0.5)), ry:Math.PI/2 + (R() - 0.5)*0.8, rx:(R() - 0.5)*0.12, rz:(R() - 0.5)*0.12, c:new THREE.Color().setScalar(1 + R()*0.4) }); }
+    crG.forEach((g,i) => group.add(instTiled(g, wallRock, crL[i], { tile:700 })));
     const snagG = [snagGeo(5), snagGeo(6), snagGeo(7)], snagL = snagG.map(() => []), charMat = new THREE.MeshStandardMaterial({ vertexColors:true, color:0x2a221d, map:tex.bark, roughness:0.95 });
     for (let i=0;i<Math.round(520*Q.density);i++){ const z = -1500 + R()*2600, x = lx(z) + (R() < 0.5 ? -1 : 1)*(lw(z)*2.4 + R()*300), y = heightAt(x,z); if (y > 200 || flowField(x,z)) continue; const s = 0.8 + R()*0.6;
       snagL[(R()*3)|0].push({ p:new THREE.Vector3(x, y - 0.3, z), s:new THREE.Vector3(s,s,s), ry:R()*TAU }); }
     snagG.forEach((g,i) => group.add(instTiled(g, charMat, snagL[i], { tile:300 })));
-    const sc = [], obsMat = plantMat({ wind:0, back:0, rock:true, roughness:0.32 }), ashMat = plantMat({ wind:0, back:0, rock:true, map:tex.ground, roughness:0.9 });
-    [boulderGeo(61,3), boulderGeo(62,3)].forEach((g,i) => sc.push(scatter({ geo:g, mat:i ? ashMat : obsMat, tile:48, radius:170, per:0.0028, seed:610+i, shadow:true, place:(x,z,r)=>{ const y = heightAt(x,z); if (z > ZV - 40 && Math.abs(x - lx(z)) < lw(z)*1.6) return null; const s = 0.4 + r()*r()*2.8, q = i ? 0.55 + r()*0.25 : 0.12 + r()*0.08; return { y:y - s*0.25, s, sy:s*(0.55 + r()*0.5), c:new THREE.Color(q, q*0.95, q*0.92) }; } })));
+    const sc = [], obsMat = cragMat({ grain:2.2, bump:0.6, roughness:0.3 }), clinkMat = cragMat({ grain:1.6, bump:1.6, pits:0.6, roughness:0.95, lichen:[0.45,0.42,0.4], lichenK:0.45 });
+    // glassy obsidian blocks, and rough aa clinker that piles up along the river's levees and the flow lobes
+    [cragGeo(61, { cuts:14, cut:[0.45, 0.8], noise:0.06, ridge:0.02, dark:[0.04,0.04,0.045], lit:[0.1,0.1,0.11] }), cragGeo(62, { cuts:12, cut:[0.35, 0.8], noise:0.3, ridge:0.18, dark:[0.1,0.085,0.08], lit:[0.26,0.2,0.17] })].forEach((g,i) => sc.push(scatter({ geo:g, mat:i ? clinkMat : obsMat, tile:48, radius:170, per:0.0028, seed:610+i, shadow:true, place:(x,z,r)=>{ const y = heightAt(x,z); if (z > ZV - 40 && Math.abs(x - lx(z)) < lw(z)*1.6) return null; const s = 0.4 + r()*r()*2.8, q = 0.8 + r()*0.4; return { y:y - s*0.25, s, sy:s*(0.55 + r()*0.5), c:new THREE.Color(q, q*0.97, q*0.95) }; } })));
+    const clink = cragGeo(63, { cuts:12, cut:[0.35, 0.75], noise:0.35, ridge:0.2, sharp:1, dark:[0.08,0.06,0.055], lit:[0.24,0.16,0.12] });
+    sc.push(scatter({ geo:clink, mat:clinkMat, tile:24, radius:110, per:0.05, seed:640, place:(x,z,r)=>{ const lv = z > ZV - 40 ? Math.abs(Math.abs(x - lx(z)) - lw(z)*1.45)/(lw(z)*0.5) : 9, fa = flowAmt(x,z);
+      if (lv > 1 && (fa < 0.35 || r() > 0.25)) return null; if (r() > (lv < 1 ? 1 - lv : 0.5)) return null; const s = 0.25 + r()*r()*1.6; return { y:heightAt(x,z) - s*0.2, s, sy:s*(0.5 + r()*0.5), rx:r()*TAU, c:new THREE.Color().setScalar(0.8 + r()*0.4) }; } }));
     const tuft = bladeClump({ blades:9, seg:3, h:[0.2,0.5], w:0.03, spread:0.2, bend:0.7, colA:lin(0.15,0.12,0.09), colB:lin(0.45,0.38,0.28), seed:63 });
     sc.push(scatter({ geo:tuft, mat:plantMat({ wind:0.08, back:0.4 }), tile:24, radius:60, per:0.25, seed:630, place:(x,z,r)=>{ const y = heightAt(x,z); if (y > 140 || r() > 0.35 || flowField(x,z) || (z > ZV - 40 && Math.abs(x - lx(z)) < lw(z)*2.6) || ventD(x,z) < 30) return null; return { y:y - 0.03, s:0.6 + r()*0.8 }; } }));
     sc.forEach(o => group.add(o.group));
 
     // ---- Plume, fumarole steam, ejecta, embers
     const plume = puffField({ count:Math.round(260*Math.max(0.6, Q.density)), seed:21, life:95, rise:2700, spread:420, size:[130, 760], drift:[15, 0, 5], opacity:0.88,
-      colA:[0.1,0.09,0.085], colB:[0.32,0.31,0.3], glow:[1.6,0.36,0.06], order:3, fogK:0.45, emit:(i, r) => [CX + (r()-0.5)*120, lakeY + 30, CZ + (r()-0.5)*120] });
+      colA:[0.07,0.065,0.06], colB:[0.38,0.36,0.34], glow:[2.6,0.6,0.09], order:3, fogK:0.45, emit:(i, r) => [CX + (r()-0.5)*120, lakeY + 30, CZ + (r()-0.5)*120] });
+    plume.material.fragmentShader = plume.material.fragmentShader.replace('pow(1.0 - vAge, 7.0)', 'pow(1.0 - vAge, 30.0)');   // the crater lights only the column's root; above it the ash reads dark
     const steam = puffField({ count:vents.length*16, seed:22, life:10, rise:38, spread:9, size:[3, 22], drift:[0.9, 0, 0.3], opacity:0.42, colA:[0.92,0.92,0.88], colB:[0.97,0.97,0.96], order:4,
       emit:(i) => { const [x,z] = vents[i % vents.length]; return [x, heightAt(x,z) + 0.5, z]; } });
     group.add(plume, steam);
@@ -4081,7 +4202,10 @@ function savannaMoundAt(x,z){
 }
 function savannaHeight(x,z){
   let h = 8 + 10*fbm(x*0.0011 + 3, z*0.0011, 4) + 2.4*fbm(x*0.006, z*0.006, 3);
-  for (const K of savannaKopjes){ const d = Math.hypot(x - K.x, z - K.z)/K.r; if (d < 1.45) h += K.h*Math.pow(1 - smoothstep(0, 1.4, d), 1.3)*(0.8 + 0.4*ridged(x*0.03, z*0.03, 2)); }
+  for (const K of savannaKopjes){ const d = Math.hypot(x - K.x, z - K.z)/K.r; if (d < 1.45) h += 0.5*K.h*Math.pow(1 - smoothstep(0, 1.4, d), 1.3)*(0.8 + 0.4*ridged(x*0.03, z*0.03, 2)); }   // a granite whaleback; the tors on it are blocks
+  const dc = Math.hypot(x, z + 250); if (dc > 1150){   // the far rim: an escarpment and inselbergs that break the horizon
+    const t = smoothstep(1150, 2600, dc), sel = Math.max(smoothstep(0.62, 0.9, ridged(x*0.0011 + 4, z*0.0011, 2)), smoothstep(0.05, 0.3, perlin(x*0.0005 + 1, z*0.0005)));
+    h += t*(25 + 150*Math.pow(ridged(x*0.0008 + 7, z*0.0008, 4), 1.6))*sel; }
   for (const P of savannaPools){ const d = Math.hypot(x - P.x, z - P.z)/P.r; if (d < 2.2) h = d < 1.25 ? lerp(-1.6, 0.9, smoothstep(0.6, 1.25, d)) : lerp(0.9, h, smoothstep(1.25, 2.2, d)); }
   const td = Math.abs(x - savannaTrack(z)); if (td < 4) h -= 0.18*(1 - td/4);
   return h;
@@ -4165,13 +4289,73 @@ const savannaPaint = {
     c[0] = lerp(lerp(0.56, 0.93, line), 0.88, low); c[1] = lerp(lerp(0.3, 0.86, line), 0.82, low); c[2] = lerp(lerp(0.12, 0.7, line), 0.7, low); }
 };
 function step01(b){ return b ? 1 : 0; }
+/* Savanna herds, second build: smooth spline tubes with real anatomy (deep, narrow barrel; jointed legs with the hind hock
+   bent back, fetlocks and hooves; a flattened neck; a tapering head with a muzzle; erect mane, tufted tail), painted per
+   part. Same conventions as savannaBeastGeo (feet at y 0, head toward +z, legs below o.leg), so savannaBeastMat animates it. */
+function savannaAnimalGeo(o){
+  const b = geoBuf(), L = o.leg, bl = o.body, br = o.r, by = L + br*0.85, parts = [];
+  const tube = (part, ctrl, rad, n, seg, sx = 1) => { const c = new THREE.CatmullRomCurve3(ctrl), pts = c.getPoints(n - 1), rr = pts.map((_, i) => { const u = i/(n - 1)*(rad.length - 1), k = Math.min(rad.length - 2, Math.floor(u)); return lerp(rad[k], rad[k + 1], u - k); });
+    const v0 = b.P.length/3; tubeInto(b, pts, rr, seg, {}); const v1 = b.P.length/3;
+    if (sx !== 1) for (let i=v0;i<v1;i++){ const t = Math.min(n - 1, Math.floor((i - v0)/(seg + 1))); b.P[i*3] = pts[t].x + (b.P[i*3] - pts[t].x)*sx; }
+    parts.push([v1, part]); };
+  const sl = t => (t - 0.5)*o.slope*bl;
+  tube('body', [[-0.56, 0.02, 0.5], [-0.4, 0.1, 0.92], [-0.12, -0.04, 0.9], [0.18, 0.02, 1.0], [0.4, 0.14, 0.9], [0.55, 0.24, 0.55]].map(([z, y]) => V3(0, by + y*br + sl(z + 0.5), z*bl)), [0.5, 0.92, 0.9, 1.0, 0.9, 0.55].map(k => k*br), 34, 11, 0.82);
+  for (const sx of [-1, 1]){ const x = sx*br*0.47;
+    const f = 0.36*bl, h = -0.36*bl;   // front legs straight down through knee; hind legs: stifle forward, hock back
+    tube('leg', [V3(x, by + 0.05*br + sl(0.86), f + 0.04*L), V3(x, L*0.86, f - 0.02*L), V3(x*0.95, L*0.62, f), V3(x*0.93, L*0.42, f + 0.01*L), V3(x*0.93, L*0.18, f), V3(x*0.93, L*0.06, f + 0.025*L), V3(x*0.93, 0.0, f + 0.05*L)],
+      [0.42*br, 0.3*br, 0.17*br, 0.12*br, 0.085*br, 0.1*br, 0.11*br], 12, 6);
+    tube('leg', [V3(x, by + 0.1*br + sl(0.14), h + 0.03*L), V3(x, L*0.86, h + 0.1*L), V3(x*0.95, L*0.62, h - 0.03*L), V3(x*0.93, L*0.42, h - 0.1*L), V3(x*0.93, L*0.18, h - 0.06*L), V3(x*0.93, L*0.06, h - 0.04*L), V3(x*0.93, 0.0, h - 0.01*L)],
+      [0.52*br, 0.36*br, 0.18*br, 0.12*br, 0.085*br, 0.1*br, 0.11*br], 12, 6);
+  }
+  const n0 = V3(0, by + br*0.25 + o.slope*bl*0.4, bl*0.42), dir = V3(0, Math.sin(o.neckA), Math.cos(o.neckA)), n1 = n0.clone().addScaledVector(dir, o.neck);
+  tube('neck', [n0.clone().addScaledVector(dir, -br*0.3), n0.clone().addScaledVector(dir, o.neck*0.45).add(V3(0, 0, br*0.08)), n1], [br*0.66, br*0.44, br*0.3], 12, 9, 0.66);
+  const h1 = n1.clone().add(V3(0, -o.head*0.5, o.head*0.88));
+  tube('head', [n1.clone().add(V3(0, br*0.04, -o.head*0.12)), n1.clone().lerp(h1, 0.35), n1.clone().lerp(h1, 0.72), h1, h1.clone().add(V3(0, -0.02*o.head, 0.05*o.head))], [br*0.3, br*0.31, br*0.21, br*0.15, br*0.05], 10, 8, 0.75);
+  for (const sx of [-1, 1]){
+    tube('ear', [n1.clone().add(V3(sx*br*0.14, br*0.18, -0.04*o.head)), n1.clone().add(V3(sx*br*0.36, br*0.42, -0.1*o.head)), n1.clone().add(V3(sx*br*0.5, br*0.62, -0.14*o.head))], [br*0.07, br*0.08, br*0.015], 4, 5);
+    if (o.horns === 'lyre') tube('horn', [n1.clone().add(V3(sx*br*0.1, br*0.2, 0)), n1.clone().add(V3(sx*br*0.35, br*1.1, -br*0.6)), n1.clone().add(V3(sx*br*0.2, br*1.9, -br*0.4))], [br*0.07, br*0.05, br*0.015], 6, 5);
+    if (o.horns === 'hook') tube('horn', [n1.clone().add(V3(sx*br*0.1, br*0.25, 0)), n1.clone().add(V3(sx*br*0.75, br*0.3, -0.05)), n1.clone().add(V3(sx*br*0.85, br*0.75, 0.05))], [br*0.11, br*0.06, br*0.02], 6, 5);
+    if (o.horns === 'ossicone') tube('horn', [n1.clone().add(V3(sx*br*0.12, br*0.1, -0.05)), n1.clone().add(V3(sx*br*0.15, br*0.4, -0.08))], [br*0.06, br*0.075], 3, 5);
+  }
+  const top = V3(0, Math.cos(o.neckA), -Math.sin(o.neckA));   // the neck's dorsal side
+  if (o.mane) for (let i=0;i<=16;i++){ const t = i/16, p = n0.clone().lerp(n1, t).addScaledVector(top, br*lerp(0.6, 0.27, t)), up = top.clone().addScaledVector(dir, 0.25).normalize();
+    tube('mane', [p, p.clone().addScaledVector(up, o.mane*(1 - 0.3*t))], [br*0.07, br*0.03], 2, 3); }
+  const tb = V3(0, by + br*0.18 + sl(0), -bl*0.56); tube('tail', [tb, tb.clone().add(V3(0, -o.tail*0.45, -0.08)), tb.clone().add(V3(0, -o.tail*0.85, -0.06)), tb.clone().add(V3(0, -o.tail, -0.05))], [br*0.08, br*0.05, br*0.06, br*0.1], 8, 5);
+  const g = owned(geoFinish(b)), p = g.attributes.position, c = g.attributes.color, col = [0, 0, 0], ctx = { by, br, bl, L, n0, n1, h1, dir, o };
+  for (let i=0, k=0;i<p.count;i++){ while (i >= parts[k][0]) k++; o.paint2(col, p.getX(i), p.getY(i), p.getZ(i), parts[k][1], ctx); c.setXYZ(i, col[0], col[1], col[2]); }
+  g.computeVertexNormals(); return g;
+}
+const savannaPaint2 = {
+  zebra:(c, x, y, z, part, K) => { const { by, br, bl, n0, n1, h1, dir } = K; let s, k;
+    if (part === 'leg') s = y < 0.07 ? -1 : Math.sin(y*26 + 0.4);
+    else if (part === 'neck' || part === 'mane') s = Math.sin(V3(x, y, z).sub(n0).dot(dir)*24 + 1.2);
+    else if (part === 'head'){ const t = V3(x, y, z).distanceTo(n1)/n1.distanceTo(h1); s = t > 0.78 ? -1 : Math.sin(t*22 + Math.abs(x)*30); }
+    else if (part === 'tail'){ s = y < by - K.o.tail*0.7 ? -1 : 1; }
+    else if (part === 'ear' || part === 'horn'){ s = 0.3; }
+    else { const w = smoothstep(-0.12*bl, -0.34*bl, z), rz = -0.5*bl, ry = by + 0.35*br;   // barrel stripes run down the flank and sweep into arcs over the haunch
+      s = lerp(Math.sin(z*28 + 2.2*Math.sin(y*5) + 0.5*Math.sin(x*12)), Math.sin(Math.hypot(z - rz, (y - ry)*1.15)*30), w);
+      if (y < by - br*0.82 && Math.abs(x) < br*0.18) s = -1; }   // dark ventral line
+    k = smoothstep(-0.18, 0.18, s); c[0] = lerp(0.045, 0.88, k); c[1] = lerp(0.04, 0.86, k); c[2] = lerp(0.04, 0.81, k); },
+  impala:(c, x, y, z, part, K) => { const { by, br, bl } = K, belly = part === 'body' ? smoothstep(by - br*0.3, by - br*0.75, y) : part === 'leg' ? smoothstep(K.L*0.95, K.L*0.75, y)*0.6 : 0;
+    const back = smoothstep(by - br*0.15, by + br*0.6, y); c[0] = lerp(lerp(0.66, 0.48, back), 0.93, belly); c[1] = lerp(lerp(0.42, 0.27, back), 0.89, belly); c[2] = lerp(lerp(0.21, 0.12, back), 0.82, belly);
+    if (part === 'leg' && y < 0.06) c[0] = c[1] = c[2] = 0.06; if (part === 'horn') { c[0] = 0.18; c[1] = 0.15; c[2] = 0.12; }
+    if (part === 'tail' || (part === 'body' && z < -0.5*bl && Math.abs(x) > br*0.15)) { c[0] = c[1] = c[2] = 0.07; } if (part === 'head' && V3(x, y, z).distanceTo(K.h1) < br*0.12) { c[0] = c[1] = c[2] = 0.08; } },
+  wildebeest:(c, x, y, z, part, K) => { const { by, br, bl } = K, band = part === 'body' ? 0.86 + 0.14*Math.sin(z*30 + y*3)*smoothstep(-0.1*bl, 0.3*bl, z) : 1;
+    let r = 0.32, g = 0.31, bb = 0.33; if (part === 'head' || part === 'mane' || part === 'tail') { r = 0.1; g = 0.095; bb = 0.1; } if (part === 'horn') { r = 0.14; g = 0.13; bb = 0.12; }
+    if (part === 'leg' && y < 0.08) { r = g = bb = 0.06; } if (part === 'neck') { const t = smoothstep(by, K.n1.y, y); r = lerp(0.26, 0.12, t); g = lerp(0.25, 0.11, t); bb = lerp(0.27, 0.12, t); }
+    c[0] = r*band; c[1] = g*band; c[2] = bb*band; },
+  giraffe:(c, x, y, z, part, K) => { const l1 = 1 - smoothstep(0.02, 0.07, Math.abs(perlin(x*3.2 + 1.7, y*3.2 + z*3.3))), l2 = 1 - smoothstep(0.02, 0.07, Math.abs(perlin(x*3.1 + 9.1, y*2.9 - z*3.4 + 4)));
+    const line = Math.max(l1, l2)*smoothstep(0.6, 1.2, y), low = part === 'leg' ? smoothstep(K.L*0.9, K.L*0.4, y) : 0;
+    c[0] = lerp(lerp(0.56, 0.93, line), 0.88, low); c[1] = lerp(lerp(0.3, 0.86, line), 0.82, low); c[2] = lerp(lerp(0.12, 0.7, line), 0.7, low);
+    if (part === 'horn' || part === 'mane' || (part === 'tail' && y < K.by - K.o.tail*0.7)) { c[0] = 0.12; c[1] = 0.08; c[2] = 0.05; } if (part === 'leg' && y < 0.1) c[0] = c[1] = c[2] = 0.08; }
+};
 const savannaBeasts = {
   impala:{ leg:0.62, body:1.15, r:0.27, neck:0.5, neckA:0.95, head:0.32, slope:0, horns:'lyre', tail:0.22, run:13, walk:1.2, stride:1.6, calm:16, wary:85, spread:22 },
   zebra:{ leg:0.8, body:1.5, r:0.36, neck:0.66, neckA:0.85, head:0.52, slope:0, mane:0.12, tail:0.55, run:11, walk:1.1, stride:2.1, calm:14, wary:70, spread:18 },
   wildebeest:{ leg:0.78, body:1.55, r:0.42, neck:0.45, neckA:0.5, head:0.56, slope:0.08, horns:'hook', mane:0.1, tail:0.6, run:11, walk:1.0, stride:2.1, calm:14, wary:65, spread:26 },
   giraffe:{ leg:1.9, body:1.9, r:0.46, neck:2.3, neckA:1.12, head:0.55, slope:0.22, horns:'ossicone', mane:0.06, tail:0.9, run:9, walk:0.8, stride:3.4, calm:12, wary:55, spread:30 }
 };
-for (const k in savannaBeasts){ const B = savannaBeasts[k], by = B.leg + B.r*0.85; B.paint = savannaPaint[k]; B.pivotY = by + B.r*0.25 + B.slope*B.body*0.4; B.pivotZ = B.body*0.42; }
+for (const k in savannaBeasts){ const B = savannaBeasts[k], by = B.leg + B.r*0.85; B.paint = savannaPaint[k]; B.paint2 = savannaPaint2[k]; B.pivotY = by + B.r*0.25 + B.slope*B.body*0.4; B.pivotZ = B.body*0.42; }
 /* Wind-combed grass: plantMat plus travelling gust fronts that bend the blades along the wind and lighten them */
 const savannaGust = { value:new THREE.Vector4(1, 0, 0, 0.5) };
 function savannaGrassMat(){
@@ -4184,7 +4368,12 @@ function savannaGrassMat(){
         float hh = max(position.y, 0.0), bend = (0.14 + 1.1*g)*uGust.w*hh*hh*0.45;
         transformed.x += dot(wd, ax)*bend; transformed.z += dot(wd, az)*bend; transformed.y -= bend*0.3*hh; }`);
     sh.fragmentShader = 'varying float vGust;\n' + sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
-        diffuseColor.rgb *= 1.0 + 0.7*vGust*smoothstep(0.15, 0.6, vColor.r);`);
+        diffuseColor.rgb *= 1.0 + 0.7*vGust*smoothstep(0.15, 0.6, vColor.r);`)
+      .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+        { // golden hour: a low sun shines through the seed heads and blade tips, so the field glows looking toward it
+          vec3 Vd = normalize(vViewPosition); float sy = dot(uSunView, normalize(mat3(viewMatrix)*vec3(0.0, 1.0, 0.0))), lo = smoothstep(-0.02, 0.06, sy)*(1.0 - smoothstep(0.12, 0.5, sy));
+          float bs = pow(clamp(dot(-Vd, uSunView)*0.5 + 0.5, 0.0, 1.0), 6.0);
+          reflectedLight.directDiffuse += diffuseColor.rgb*uSunCol*vec3(1.0, 0.8, 0.5)*bs*lo*0.9*smoothstep(0.2, 0.7, vColor.r); }`);
   };
   m.customProgramCacheKey = () => 'savGrass';
   return m;
@@ -4203,6 +4392,7 @@ Helios.registerBiome({
   clouds:{ cover:0.34, base:1900, top:3500, cirrus:0.5 },
   sky:{ turbidity:7.5, rayleigh:1.7, mie:0.008, mieG:0.86 },
   fog:{ density:0.00058, tint:[1.12,0.96,0.8], storm:0.8, stormTint:[0.4,0.38,0.4] },
+  post:{ shafts:0.1, bloom:0.4, thresh:0.92, warm:0.02, sat:1.06, contrast:0.4 },   // an open horizon: shafts would only bloom the sky around a low sun
   ground:[0.45,0.35,0.18],
   camera(){ const y = savannaHeight(-6, 175); return { pos:[-6, y + 2.6, 175], look:[30, y + 6, -320] }; },
   build(k){
@@ -4216,7 +4406,8 @@ Helios.registerBiome({
         if (pd < 1.45){ const t = smoothstep(1.0, 1.45, pd); return srgb(c, lerp(0.27, 0.42, t), lerp(0.2, 0.36, t), lerp(0.13, 0.2, t)); }
         if (Math.abs(x - savannaTrack(z)) < 3.2) return srgb(c, 0.58 + 0.05*m, 0.4 + 0.04*m, 0.26 + 0.03*m);
         const mo = savannaMoundAt(x,z); if (mo && Math.hypot(x - mo.x, z - mo.z) < 6*mo.s) return srgb(c, 0.6 + 0.05*m, 0.39 + 0.04*m, 0.25);
-        if (savannaKopjeD(x,z) < 0.8) return srgb(c, 0.5 + 0.08*m, 0.46 + 0.06*m, 0.42 + 0.05*m);
+        if (savannaKopjeD(x,z) < 0.8){ const t = smoothstep(0.75, 0.3, savannaKopjeD(x,z)); return srgb(c, lerp(0.62, 0.46, t) + 0.08*m, lerp(0.5, 0.42, t) + 0.06*m, lerp(0.34, 0.38, t) + 0.05*m); }
+        const far = smoothstep(1150, 1900, Math.hypot(x, z + 250)); if (far > 0){ const b = 0.5 + 0.5*perlin(x*0.004, z*0.004); return srgb(c, lerp(0.75, 0.25 + 0.07*b, far), lerp(0.6, 0.26 + 0.06*b, far), lerp(0.3, 0.17 + 0.03*b, far)); }   // bush-grey distant slopes
         const gh = grassH(x,z), lush = smoothstep(2.6, 1.4, pd)*0.8 + 0.12*smoothstep(0.4, 0.8, 0.5 + 0.5*perlin(x*0.004 + 9, z*0.004));
         const bare = 1 - smoothstep(0.2, 0.9, gh);
         return srgb(c, lerp(lerp(0.8 + 0.07*n, 0.45, lush), 0.6, bare*0.6), lerp(lerp(0.6 + 0.07*n, 0.46, lush), 0.42, bare*0.6), lerp(lerp(0.27 + 0.05*m, 0.18, lush), 0.26, bare*0.6));
@@ -4234,6 +4425,8 @@ Helios.registerBiome({
         const p = t.wood.attributes.position, yTop = 17*0.7*0.86;
         for (let i=0;i<p.count;i++){ const y = p.getY(i); if (y > yTop) continue; const u = clamp(y/yTop, 0, 1), kk = 1 + 1.05*Math.sin(Math.PI*Math.min(1, u*0.95 + 0.08))*(1 - 0.35*u); p.setX(i, p.getX(i)*kk); p.setZ(i, p.getZ(i)*kk); }
         t.wood.computeVertexNormals(); t.wood.computeBoundingBox(); t.wood.computeBoundingSphere(); t.S *= 1.1; return t; } });
+    defineSpecies('savFever', { seed:1304, leaves:() => atlas('savFever', 84, { hue:0.19, sat:0.45, light:0.36, len:[14,20], width:0.36, count:[30,40], twig:'#7a7a3a' }), bark:0xb7b26a, fringe:0x5a6226, roughness:0.6, flutter:0.03,   // fever trees: sulphur bark, open tiered crowns, by water
+      tree:{ h:16, r:0.3, buttress:0.1, fins:3, lean:0.08, wobble:0.6, trunkTop:0.6, bStart:0.42, branches:8, el:[0.45,0.95], bLen:0.42, curl:-0.02, subs:2, cR:2.2, flatY:0.4, cards:26, card:1.25, droop:0.0, umbrella:true } });
     defineSpecies('savBush', { seed:1303, leaves:leafBu, bark:0x4e4034, fringe:0x3a3a1e, tree:{ h:3.6, r:0.1, buttress:0, lean:0.35, wobble:0.5, trunkTop:0.4, bStart:0.1, branches:9, el:[0.3,0.95], bLen:0.55, curl:0.1, subs:2, cR:1.4, flatY:0.6, cards:24, card:1.0, droop:0.1 } });
     const F = k.forest(), clear = (x,z) => savannaPoolD(x,z) > 1.35 && savannaKopjeD(x,z) > 0.55 && Math.abs(x - savannaTrack(z)) > 7 && !(Math.abs(x + 6) < 14 && Math.abs(z - 175) < 30);
     const tint = () => new THREE.Color(0.85 + R()*0.3, 0.88 + R()*0.24, 0.8 + R()*0.3);
@@ -4241,7 +4434,8 @@ Helios.registerBiome({
       const x = (R() - 0.5)*2900, z = -250 + (R() - 0.5)*2900, park = 0.5 + 0.5*perlin(x*0.003 + 5, z*0.003), near = smoothstep(4, 1.4, savannaPoolD(x,z));
       if (!clear(x,z) || R() > 0.12 + 0.5*park*park + 0.6*near) continue;
       const y = heightAt(x,z), p = R();
-      if (p < 0.45) F.add('savAcacia', x, y - 0.2, z, 0.75 + R()*0.6, R()*TAU, tint());
+      if (near > 0.35 && p < 0.3) F.add('savFever', x, y - 0.2, z, 0.8 + R()*0.5, R()*TAU, tint());
+      else if (p < 0.45) F.add('savAcacia', x, y - 0.2, z, 0.75 + R()*0.6, R()*TAU, tint());
       else if (p < 0.465) F.add('savBaobab', x, y - 0.4, z, 0.8 + R()*0.45, R()*TAU, tint());
       else if (park > 0.55 || near > 0.3) F.add('savBush', x, y - 0.1, z, 0.6 + R()*0.8, R()*TAU, tint());   // thorn thickets gather where the parkland is dense
     }
@@ -4250,12 +4444,21 @@ Helios.registerBiome({
     F.add('savAcacia', -48, heightAt(-48, 118) - 0.2, 118, 1.35, 0.4, new THREE.Color(1, 1, 0.95)); F.add('savBaobab', 132, heightAt(132, -205) - 0.4, -205, 1.2, 1.1);
     group.add(F.build());
 
-    // ---- Kopjes: piles of rounded granite, some balanced on others; termite cathedrals across the plain
-    const granite = new THREE.MeshStandardMaterial({ vertexColors:true, map:tex.ground, roughness:0.86 }), kopL = [[], [], []], kopG = [boulderGeo(1311, 3), boulderGeo(1312, 3), boulderGeo(1313, 3)];
-    for (const K of savannaKopjes) for (let i=0;i<K.r*0.45;i++){ const a = R()*TAU, d = Math.sqrt(R())*K.r*0.95, x = K.x + Math.cos(a)*d, z = K.z + Math.sin(a)*d, s = (2 + R()*R()*9)*(1.2 - 0.5*d/K.r), y = heightAt(x,z);
-      const q = 1.35 + R()*0.3, it = { p:new THREE.Vector3(x, y - s*0.3, z), s:new THREE.Vector3(s, s*(0.6 + R()*0.35), s*(0.8 + R()*0.4)), ry:R()*TAU, rx:(R() - 0.5)*0.3, c:new THREE.Color(q*1.05, q*0.96, q*0.92) };
-      kopL[(R()*3)|0].push(it); if (s > 6 && R() < 0.35){ const s2 = s*(0.35 + R()*0.25); kopL[(R()*3)|0].push({ p:new THREE.Vector3(x + (R() - 0.5)*s*0.3, y - s*0.3 + it.s.y*0.92 + s2*0.4, z), s:new THREE.Vector3(s2, s2*0.75, s2), ry:R()*TAU, c:it.c }); } }
-    kopG.forEach((g, i) => group.add(instTiled(g, granite, kopL[i], { tile:300 })));
+    // ---- Kopjes: granite tors, jointed blocks stacked in columns and balanced on one another, with a skirt of fallen
+    // boulders; termite cathedrals across the plain
+    const granite = cragMat({ grain:1.5, bump:0.9, lichen:[0.66,0.52,0.3], lichenK:0.55 }), kopL = [[], [], []];
+    const kopG = [cragGeo(1311, { round:0.75, cuts:4, sharp:0.45, noise:0.1, ridge:0.03, scale:[1, 0.7, 0.85], dark:[0.38,0.33,0.29], lit:[0.66,0.6,0.54], top:[0.5,0.47,0.4], topK:0.4 }),
+      cragGeo(1312, { round:0.6, cuts:5, sharp:0.55, noise:0.12, scale:[1.2, 0.55, 0.9], dark:[0.4,0.35,0.31], lit:[0.7,0.63,0.56] }), cragGeo(1313, { detail:2, round:0.45, cuts:6, sharp:0.6, noise:0.16, scale:[0.9, 0.8, 0.9], dark:[0.36,0.31,0.28], lit:[0.62,0.56,0.5] })];
+    const blk = (x, y, z, sx, sy, sz, ry, q, small) => kopL[small ? 2 : (R()*2)|0].push({ p:new THREE.Vector3(x, y, z), s:new THREE.Vector3(sx, sy, sz), ry, rx:(R() - 0.5)*0.12, rz:(R() - 0.5)*0.12, c:new THREE.Color(q*1.04, q*0.97, q*0.93) });
+    for (const K of savannaKopjes){
+      for (let t=0;t<Math.round(2 + K.r/22);t++){ const a = R()*TAU, d = Math.sqrt(R())*K.r*0.5, tx = K.x + Math.cos(a)*d, tz = K.z + Math.sin(a)*d, ry = R()*TAU, sz = (0.5 + 0.5*(1 - d/(K.r*0.5)))*(5 + K.h*0.3);
+        for (let c=0;c<2 + (R()*4|0);c++){ const ca = ry + c*1.9 + R(), cd = c ? sz*(0.7 + R()*0.5) : 0; let x = tx + Math.cos(ca)*cd, z = tz + Math.sin(ca)*cd, y = heightAt(x, z) - sz*0.25, w = sz*(0.8 + R()*0.5);
+          for (let l=0;l<1 + (R()*(c ? 3 : 4)|0) && w > 1.2;l++){ const hgt = w*(0.6 + R()*0.4), q = 1 + R()*0.3; blk(x, y + hgt*0.25, z, w, hgt, w*(0.75 + R()*0.4), ry + (R() - 0.5)*0.5, q);   // one block, then the next sits on its joint
+            y += hgt*0.88; w *= 0.62 + R()*0.3; x += (R() - 0.5)*w*0.3; z += (R() - 0.5)*w*0.3; } } }
+      for (let i=0;i<K.r*0.3;i++){ const a = R()*TAU, d = K.r*(0.3 + R()*0.8), x = K.x + Math.cos(a)*d, z = K.z + Math.sin(a)*d, s = (1 + R()*R()*5)*(1.25 - 0.6*d/K.r);
+        blk(x, heightAt(x,z) - s*0.25, z, s, s*(0.55 + R()*0.3), s*(0.8 + R()*0.4), R()*TAU, 1 + R()*0.3, true); }   // the skirt is cheaper rock
+    }
+    kopG.forEach((g, i) => group.add(instTiled(g, granite, kopL[i], { tile:500 })));
     const moundG = [savannaMoundGeo(1321), savannaMoundGeo(1322), savannaMoundGeo(1323), savannaMoundGeo(1324)], moundL = moundG.map(() => []);
     for (let i=-22;i<22;i++) for (let j=-26;j<20;j++){ const m = savannaMoundAt((i + 0.5)*70, (j + 0.5)*70); if (!m || Math.hypot(m.x, m.z + 250) > 1500) continue;
       moundL[m.k].push({ p:new THREE.Vector3(m.x, heightAt(m.x, m.z) - 0.3, m.z), s:new THREE.Vector3(m.s, m.s*(0.85 + 0.3*hash2(m.x, m.z)), m.s), ry:m.x }); }
@@ -4280,8 +4483,8 @@ Helios.registerBiome({
 
     // ---- Herds: impala, zebra, wildebeest and giraffe. They graze, startle at an exposed viewer, flee fire and strikes
     const herds = [], dm = new THREE.Object3D();
-    for (const [kind, n, hx, hz] of [['impala', 26, -150, 45], ['zebra', 16, 30, -40], ['wildebeest', 24, -230, -230], ['giraffe', 6, 160, -20]]){
-      const B = savannaBeasts[kind], geo = savannaBeastGeo(B), mesh = new THREE.InstancedMesh(geo, savannaBeastMat(B), n), aLeg = new THREE.InstancedBufferAttribute(new Float32Array(n*4), 4);
+    for (const [kind, n, hx, hz] of [['impala', 26, -150, 45], ['zebra', 16, 30, -40], ['wildebeest', 24, -230, -230], ['giraffe', 6, 160, -20], ['wildebeest', 44, 200, -470], ['zebra', 12, 250, -430]]){   // and a mixed column out on the open plain
+      const B = savannaBeasts[kind], geo = savannaAnimalGeo(B), mesh = new THREE.InstancedMesh(geo, savannaBeastMat(B), n), aLeg = new THREE.InstancedBufferAttribute(new Float32Array(n*4), 4);
       geo.setAttribute('aLeg', aLeg); mesh.frustumCulled = false; mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh);
       const H = { kind, B, mesh, aLeg, cx:hx, cz:hz, hd:R()*TAU, state:'graze', t:0, fx:0, fz:1, members:[] };
       for (let i=0;i<n;i++){ const a = R()*TAU, d = Math.sqrt(R())*B.spread, q = 0.88 + R()*0.24;
@@ -4390,7 +4593,8 @@ Helios.registerBiome({
         stamp.userData.tick(t); kick.userData.tick(t);
         stamp.material.uniforms.uOpacity.value = 0.42*dry; stamp.material.uniforms.uDrift.value.set(env.wind[0]*0.5, 0, env.wind[1]*0.5);
         savannaRespawn(stamp, t, () => { if (!stampeders.length || dry < 0.05) return null; const m = stampeders[(R()*stampeders.length)|0]; return [m.x, heightAt(m.x, m.z) + 0.3, m.z]; });
-        let spd = lastOK ? last.distanceTo(S.pos)/Math.max(dt, 1e-3) : 0; if (spd > 90) spd = 0;   // a teleport, not a sprint last.copy(S.pos); lastOK = true;
+        let spd = lastOK ? last.distanceTo(S.pos)/Math.max(dt, 1e-3) : 0; if (spd > 90) spd = 0;   // a teleport, not a sprint
+        last.copy(S.pos); lastOK = true;
         const footY = heightAt(S.pos.x, S.pos.z), kicking = spd > 7 && S.pos.y - footY < 3 && dry > 0.1 && grassH(S.pos.x, S.pos.z) < 2;
         kick.material.uniforms.uOpacity.value = 0.45*dry;
         savannaRespawn(kick, t, () => kicking ? [S.pos.x + (R() - 0.5)*1.5, footY + 0.2, S.pos.z + (R() - 0.5)*1.5] : null);
