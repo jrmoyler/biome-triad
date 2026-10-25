@@ -1848,6 +1848,7 @@ Helios.registerBiome({
   sky:{ turbidity:5.5, rayleigh:2.0, mie:0.006, mieG:0.85 },
   fog:{ density:0.0019, tint:[0.94,1.0,0.9] },
   ground:[0.16,0.2,0.08],
+  post:{ shafts:0.45, sat:1.12, ao:0.7 },
   camera(){ const rx=z=>38*Math.sin(z*0.0055)+22*Math.sin(z*0.0155+1.3); return { pos:[rx(140),7.5,140], look:[rx(-160),9,-160] }; },
   build(k){
     const { noise:{fbm,perlin}, rng, smoothstep, lerp, srgb, flora, lin, scatter, plantMat, fernPlant, broadleafPlant, boulderGeo, logGeo, gullGeo, critterMat, lilyGeo, lianaGeo } = k;
@@ -1857,18 +1858,42 @@ Helios.registerBiome({
       const d=Math.abs(x-rx(z)), w=rw(z);
       const bed = -3.4*(1-Math.min(1,(d/w)**2));
       const hills = Math.max(0, fbm(x*0.0032+5, z*0.0032, 4))*44 * smoothstep(w*1.5, w*6, d);
-      const ground = 1.4 + hills + fbm(x*0.03, z*0.03, 3)*1.0;
+      const ground = 1.4 + hills + fbm(x*0.03, z*0.03, 3)*1.0 + 1.4*Math.exp(-(((d - w*1.32)/(w*0.24))**2))*(0.8 + 0.4*perlin(x*0.04, z*0.04));   // a natural levee, so the banks stand up out of the water
       return lerp(bed, ground, smoothstep(w*0.78, w*1.25, d));
     };
     const group = new THREE.Group();
     // Past the walkable tile the apron rises into a canopy surface, so the forest runs on to the horizon
     const canopy = (x,z) => 21*smoothstep(rw(z)*1.4, rw(z)*2.4, Math.abs(x-rx(z)))*(0.85 + 0.3*perlin(x*0.02, z*0.02));
     const canopyTint = (c,x,y,z) => { if (canopy(x,z) < 2) return y < 0.4 ? srgb(c, 0.14,0.10,0.06) : srgb(c, 0.2,0.17,0.08); const n=0.5+0.5*perlin(x*0.011,z*0.011), m=0.5+0.5*perlin(x*0.05,z*0.05); return srgb(c, 0.11+0.05*m, 0.2+0.08*n, 0.06+0.03*m); };
-    group.add(makeTerrain({ size:1800, cz:-250, seg:360, height:heightAt, apron:{ size:9000, seg:150, lift:canopy, tint:canopyTint }, detail:{ rock:[0.34,0.29,0.22], rockLo:0.42, bump:16, wet:0.9 }, color:(c,x,y,z,ny)=>{
+    const terr = makeTerrain({ size:1800, cz:-250, seg:360, height:heightAt, apron:{ size:9000, seg:150, lift:canopy, tint:canopyTint }, detail:{ rock:[0.34,0.29,0.22], rockLo:0.42, bump:16, wet:0.9 }, color:(c,x,y,z,ny)=>{
       if (y < 0.4) return srgb(c, 0.14,0.10,0.06);
       if (y < 2.6) { const t=smoothstep(0.4,2.6,y); return srgb(c, lerp(0.30,0.14,t), lerp(0.22,0.17,t), lerp(0.13,0.07,t)); }
       const n=0.5+0.5*perlin(x*0.05,z*0.05), m=0.5+0.5*perlin(x*0.21,z*0.21); return srgb(c, 0.38+0.1*n+0.05*m, 0.27+0.07*n+0.05*m, 0.13+0.04*n);
-    }}));
+    }});
+    // River banks and floor: dark sticky mud with a silt line and drying cracks up the bank (rough, so it no longer mirrors
+    // the sky), and a litter of fallen leaves, seeds and green moss over the forest floor
+    { const tm = terr.material, prev = tm.onBeforeCompile, LC = [new THREE.Color().setRGB(0.36,0.19,0.08, THREE.SRGBColorSpace), new THREE.Color().setRGB(0.52,0.37,0.17, THREE.SRGBColorSpace)];
+      tm.onBeforeCompile = sh => { prev(sh); sh.uniforms.uAmzLit = { value:LC };
+        sh.fragmentShader = 'uniform vec3 uAmzLit[2];\n' + sh.fragmentShader.replace('        // surface state: rain-dark', `        float amzBank = 0.0;
+        { float inT = step(abs(vWP.x), 899.0)*step(abs(vWP.z + 250.0), 899.0), dist = length(vViewPosition), fineA = 1.0 - smoothstep(6.0, 40.0, dist);
+          amzBank = (1.0 - smoothstep(1.5, 3.4, vWP.y + 0.9*(n1 - 0.5)))*step(-0.8, vWP.y)*inT;
+          float crk = smoothstep(0.07, 0.0, abs(tvn(twp*1.9 + n2*0.6) - 0.5))*smoothstep(0.9, 1.8, vWP.y)*fineA;
+          float silt = smoothstep(0.3, 0.0, abs(vWP.y - 0.32 - 0.12*n1)), rootS = smoothstep(0.62, 0.7, tvn(vec2(twp.x*0.7 + twp.y*0.7, vWP.y*5.0)))*smoothstep(0.5, 1.6, vWP.y);
+          vec3 mud = diffuseColor.rgb*vec3(1.08, 0.9, 0.78)*(0.5 + 0.3*n2)*(1.0 - 0.45*crk);
+          mud = mix(mud, diffuseColor.rgb*vec3(1.25, 1.12, 0.95)*1.2, silt*0.55);
+          mud = mix(mud, vec3(0.05, 0.03, 0.017)*(0.7 + 0.6*n4), rootS*0.75);   // root mats exposed where the bank slumped
+          diffuseColor.rgb = mix(diffuseColor.rgb, mud, amzBank*(1.0 - 0.6*rk));
+          float lm = (1.0 - amzBank)*(1.0 - rk)*inT*smoothstep(2.4, 3.6, vWP.y);
+          float drift = tvn(twp*1.1 + n3*2.0)*0.6 + tvn(twp*4.3)*0.4, spk = tvn(twp*24.0 + 5.0)*0.6 + tvn(twp*57.0)*0.4, farL = smoothstep(5.0, 28.0, dist);
+          vec3 lc = mix(uAmzLit[0], uAmzLit[1], smoothstep(0.3, 0.7, tvn(twp*6.0 + 7.0)*0.7 + 0.3*spk))*mix(0.45 + 1.0*spk, 0.85, farL);
+          diffuseColor.rgb = mix(diffuseColor.rgb, lc, 0.85*smoothstep(0.3, 0.55, drift + 0.2*n1)*lm);
+          float mossA = smoothstep(0.55, 0.7, tvn(twp*0.35 + 3.0) + 0.25*n2)*lm;
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.09, 0.02)*(0.7 + 0.6*n4), mossA*0.7);
+        }
+        // surface state: rain-dark`).replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
+        roughnessFactor = mix(roughnessFactor, mix(0.86, 0.62, smoothstep(0.6, 0.0, vWP.y)), amzBank);`).replace('uTD.x*0.012*(1.0 - 0.75*sSnow)', 'uTD.x*0.012*(1.0 - 0.75*sSnow)*(1.0 - 0.7*amzBank)'); };   // smoother, matte mud: the coarse bump glittered against the sky
+      tm.customProgramCacheKey = () => 'terrainAmazon'; }
+    group.add(terr);
     group.add(makeWater({ size:9000, cz:-250, color:0x1c1408, distortion:1.4, scale:5 }));
 
     // Forest: closed canopy of procedural broadleaf trees with kapok emergents; riverbank belt of
@@ -1932,6 +1957,12 @@ Helios.registerBiome({
     const padG = lilyGeo(401, false), flG = lilyGeo(402, true), padMat = plantMat({ wind:0, back:0.4 });
     sc.push(scatter({ geo:padG, mat:padMat, tile:24, radius:110, per:0.35, seed:320, place:(x,z,r)=>{ const d=Math.abs(x-rx(z)), w=rw(z); if (d<w*0.55 || d>w*1.02 || heightAt(x,z)>-0.2 || perlin(x*0.05,z*0.05)<-0.05) return null; const q=0.55+r()*0.3; return { y:0.0, s:0.8+r()*1.0, ry:r()*TAU, c:new THREE.Color(q, q*(0.95+r()*0.1), q*0.8) }; } }));
     sc.push(scatter({ geo:flG, mat:padMat, tile:24, radius:110, per:0.01, seed:321, place:(x,z,r)=>{ const d=Math.abs(x-rx(z)), w=rw(z); if (d<w*0.55 || d>w*1.02 || heightAt(x,z)>-0.2 || perlin(x*0.05,z*0.05)<0.05) return null; return { y:0.0, s:1.0+r()*0.6, ry:r()*TAU }; } }));
+    // bank edge: sedge and grass tufts on the mud, stranded driftwood half sunk at the waterline
+    const sedgeA = k.bladeClump({ blades:14, seg:3, h:[0.5,1.3], w:0.035, spread:0.3, bend:0.8, colA:lin(0.09,0.16,0.04), colB:lin(0.4,0.47,0.15), seed:330 });
+    sc.push(scatter({ geo:sedgeA, mat:plantMat({ wind:0.1, back:0.8 }), tile:24, radius:60, per:0.22, seed:330, place:(x,z,r)=>{ const d=Math.abs(x-rx(z)), w=rw(z); if (d<w*0.78 || d>w*1.35) return null; const y=heightAt(x,z);
+      if (y<-0.12 || y>2.4 || r() > 0.35 + 0.65*smoothstep(-0.3, 0.3, perlin(x*0.05, z*0.05))) return null; return { y:y-0.05, s:0.7+r()*0.8, c:new THREE.Color(0.85+r()*0.3, 0.9+r()*0.2, 0.75+r()*0.3) }; } }));
+    sc.push(scatter({ geo:logGeo(9), mat:logMat, tile:48, radius:130, per:0.0016, seed:331, shadow:true, place:(x,z,r)=>{ const d=Math.abs(x-rx(z)), w=rw(z); if (d<w*0.74 || d>w*0.98) return null; const y=heightAt(x,z); if (y<-0.6 || y>0.5) return null;
+      return { y:Math.max(y, -0.35)+0.05, s:0.7+r()*1.1, ry:r()*TAU, c:new THREE.Color(0.75+r()*0.2, 0.7+r()*0.2, 0.62+r()*0.2) }; } }));
     sc.forEach(o => group.add(o.group));
 
     // ---- Crepuscular shafts: soft additive beams that hang along the sun direction and follow the viewer
@@ -3019,6 +3050,18 @@ function forestBracketGeo(seed){
   }
   return owned(geoFinish(b));
 }
+/* Fallen branch: a crooked stick lying along local x with a few forked side twigs, for floor clutter */
+function forestBranchGeo(seed){
+  const r = rng(seed), b = geoBuf(), L = 1.6 + r()*2.2, R0 = 0.035 + r()*0.035, main = [];
+  for (let i=0;i<=6;i++){ const t = i/6; main.push(V3((t - 0.5)*L, R0*0.85 + 0.05*Math.sin(t*4 + seed)*t, 0.16*perlin(t*2.5, seed))); }
+  tubeInto(b, main, main.map((_, i) => R0*(1 - 0.6*i/6) + 0.006), 5, { ao:i => 0.7 + 0.05*i, uRep:1, vScale:3 });
+  for (let k=0;k<3 + (r()*3|0);k++){ const t = 0.15 + 0.75*r(), o = main[Math.round(t*6)].clone(), s = r() < 0.5 ? -1 : 1, a = s*(0.45 + 0.6*r()), l = L*(0.15 + 0.22*r());
+    const d = V3(Math.cos(a), 0.08 + 0.25*r()*r(), Math.sin(a)).normalize(), rr = R0*(1 - 0.6*t)*0.55;
+    tubeInto(b, [o, o.clone().addScaledVector(d, l*0.55), o.clone().addScaledVector(d, l).add(V3(0, -0.04, 0.06*s))], [rr, rr*0.6, 0.006], 4, { ao:() => 0.85, uRep:1, vScale:3 }); }
+  const g = owned(geoFinish(b)), c = g.attributes.color, bark = lin(0.4,0.3,0.21);
+  for (let i=0;i<c.count;i++){ const ao = c.getX(i); c.setXYZ(i, bark[0]*ao, bark[1]*ao, bark[2]*ao); }
+  return g;
+}
 /* Woody understorey: thin bark stems (one for a sapling, several for hazel or holly) carrying leaf-spray cards from a
    species leaf atlas (2x2 cells, as in genTree). Stems sample the atlas twig base, so one alpha-tested material does both. */
 function forestBushGeo(seed, o){
@@ -3092,6 +3135,7 @@ Helios.registerBiome({
   sky:{ turbidity:4.5, rayleigh:1.8, mie:0.005, mieG:0.82 },
   fog:{ density:0.0017, tint:[0.94,1.0,0.92], storm:0.6 },
   ground:[0.18,0.16,0.09],
+  post:{ shafts:0.5, ao:0.7 },
   options:[{ key:'season', label:'Season', values:[['spring','Spring'],['summer','Summer'],['autumn','Autumn'],['winter','Winter']], value:'autumn' }],
   camera(){ const sx = z => 26*Math.sin(z*0.0063 + 0.4) + 14*Math.sin(z*0.019 + 1.7) + 6*Math.sin(z*0.041); return { pos:[sx(70) + 13, 4.5, 70], look:[sx(-150) + 4, 7, -150] }; },
   build(k){
@@ -3148,12 +3192,34 @@ Helios.registerBiome({
     const LIT = { uLitA:{ value:new THREE.Color() }, uLitB:{ value:new THREE.Color() }, uLitK:{ value:0.9 }, uSeason:VU.uSeason };
     { const tm = T.material, prev = tm.onBeforeCompile;
       tm.onBeforeCompile = sh => { prev(sh); Object.assign(sh.uniforms, LIT);
-        sh.fragmentShader = 'uniform vec3 uLitA, uLitB; uniform float uLitK; uniform vec4 uSeason;\n' + sh.fragmentShader.replace('        // surface state: rain-dark', `        {
+        sh.fragmentShader = 'uniform vec3 uLitA, uLitB; uniform float uLitK; uniform vec4 uSeason;\n' + sh.fragmentShader.replace('        // surface state: rain-dark', `        float fBank = 0.0;
+        {
           float lm = (1.0 - rk)*smoothstep(0.9, 1.9, vWP.y)*step(-0.5, vKind);
           float drift = tvn(twp*1.3 + n3*2.0)*0.6 + tvn(twp*5.0)*0.4, spk = tvn(twp*26.0 + 5.0)*0.6 + tvn(twp*61.0)*0.4;   // drifts, then single leaves up close
           float farL = smoothstep(5.0, 28.0, length(vViewPosition));
           vec3 lc = mix(uLitA, uLitB, smoothstep(0.3, 0.7, tvn(twp*7.0 + 7.0)*0.7 + 0.3*spk))*mix(0.5 + 0.95*spk, 0.88, farL);
+          float hum = smoothstep(0.42, 0.78, tvn(twp*0.09 + 2.0) + 0.3*(n1 - 0.5));   // damp humus and moss hollows break up the carpet
+          lc *= mix(1.0, 0.5 + 0.2*spk, hum)*(0.8 + 0.4*tvn(twp*0.6 + 9.0));
           diffuseColor.rgb = mix(diffuseColor.rgb, lc, uLitK*smoothstep(0.28, 0.55, drift + 0.2*n1)*lm);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.035, 0.05, 0.015)*(0.6 + 0.8*n4), hum*0.45*lm*(1.0 - uSeason.y*0.5));
+          float nearL = (1.0 - smoothstep(7.0, 16.0, length(vViewPosition)))*lm*uLitK;
+          if (nearL > 0.0){   // single leaves up close: two layers of rotated blades with a midrib, then a few straight twigs
+            for (int k=0; k<2; k++){ vec2 q = twp*(k == 0 ? 7.0 : 11.0) + float(k)*17.3, ci = floor(q), fq = fract(q) - 0.5 - (vec2(th21(ci + 1.3), th21(ci + 2.7)) - 0.5)*0.36;
+              float a = th21(ci)*6.283; vec2 r = vec2(cos(a), sin(a)), l = vec2(dot(fq, r), dot(fq, vec2(-r.y, r.x)));
+              float lf = (1.0 - smoothstep(0.85, 1.0, length(l/vec2(0.34, 0.15 + 0.05*th21(ci + 4.0)))))*step(0.3, th21(ci + 8.0)), rib = (1.0 - smoothstep(0.006, 0.016, abs(l.y)))*step(abs(l.x), 0.3);
+              vec3 c = mix(uLitA, uLitB, th21(ci + 5.0))*(0.6 + 0.6*th21(ci + 9.0))*(1.0 - 0.35*rib)*(0.8 + 0.3*smoothstep(-0.3, 0.3, l.x));
+              diffuseColor.rgb = mix(diffuseColor.rgb, c, lf*nearL); }
+            vec2 tc = twp*1.3, fp = fract(tc) - 0.5; float th = th21(floor(tc)), ang = th*31.4; vec2 rd = vec2(cos(ang), sin(ang));
+            float twig = (1.0 - smoothstep(0.014, 0.026, abs(dot(fp, vec2(-rd.y, rd.x)))))*step(abs(dot(fp, rd)), 0.12 + 0.25*th)*step(0.7, th);
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.07, 0.05, 0.032)*(0.8 + 0.4*th), twig*nearL*0.9); }
+          // stream banks: wet silty mud and gravel instead of a glossy grey slab
+          fBank = (1.0 - smoothstep(0.9, 2.1, vWP.y + 0.5*(n1 - 0.5)))*step(-1.6, vWP.y)*step(-0.5, vKind);
+          vec2 gq = twp*3.1, gi = floor(gq); float gp = th21(gi), gr = 0.12 + 0.2*th21(gi + 7.0);
+          float peb = smoothstep(gr, gr - 0.05, length(fract(gq) - 0.5 - (vec2(th21(gi + 3.0), th21(gi + 5.0)) - 0.5)*0.5))*step(0.72, gp)*(1.0 - smoothstep(4.0, 14.0, length(vViewPosition)));
+          vec3 mudF = mix(vec3(0.05, 0.042, 0.03), vec3(0.11, 0.088, 0.06), smoothstep(0.25, 0.75, n2 + 0.3*(n1 - 0.5)))*(0.7 + 0.5*n4)*(0.6 + 0.4*smoothstep(-0.1, 0.9, vWP.y));
+          mudF = mix(mudF, diffuseColor.rgb, smoothstep(0.5, 0.75, tvn(twp*2.2 + 4.0))*smoothstep(0.6, 1.6, vWP.y)*0.8);   // litter and moss creeping down the upper bank
+          mudF = mix(mudF, vec3(0.2, 0.18, 0.15)*(0.55 + 0.6*th21(gi + 9.0)), peb*smoothstep(1.6, 0.2, vWP.y));
+          diffuseColor.rgb = mix(diffuseColor.rgb, mudF, fBank*(1.0 - 0.25*rk));   // the cut bank is steep enough to read as rock, but it is mud
           if (vKind < -0.5){   // distant canopy: the same seasonal turn as the trees
             float L = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)); vec3 aut = mix(vec3(2.3, 1.05, 0.18), vec3(2.4, 0.5, 0.12), step(0.5, tvn(twp*0.03)));
             diffuseColor.rgb = mix(diffuseColor.rgb, L*aut, uSeason.x*0.8);
@@ -3161,8 +3227,9 @@ Helios.registerBiome({
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.13, 0.11, 0.09)*(0.7 + 0.6*n1), uSeason.y*0.8);
           }
         }
-        // surface state: rain-dark`); };
-      tm.customProgramCacheKey = () => 'terrainForest'; }
+        // surface state: rain-dark`).replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
+        roughnessFactor = mix(roughnessFactor, mix(0.9, 0.62, smoothstep(0.5, -0.2, vWP.y)), fBank);`).replace('uTD.x*0.012*(1.0 - 0.75*sSnow)', 'uTD.x*0.012*(1.0 - 0.75*sSnow)*(1.0 - 0.65*fBank)'); };
+      tm.customProgramCacheKey = () => 'terrainForest2'; }
     group.add(T);
     group.add(makeWater({ size:9000, cz:CZ, color:0x1c2a1d, distortion:1.1, scale:6 }));
 
@@ -3319,7 +3386,13 @@ Helios.registerBiome({
     [forestMushroomGeo(1421, 0), mixG].forEach((g, i) => sc.push(scatter({ geo:g, mat:mushMat, tile:48, radius:40, per:0.08, seed:1421 + i,
       place:(x,z,r) => { if (!floor(x,z)) return null; const nl = nearLog(x, z), ne = elders.reduce((b, E) => Math.min(b, Math.hypot(x - E.x, z - E.z) - E.r), 1e9);
         const ok = nl < 1.6 || (ne > 0 && ne < 9) || perlin(x*0.06 + i*3, z*0.06) > 0.38; if (!ok || r() > (i === 0 ? 0.3 : 0.75)) return null; return { y:heightAt(x,z) - 0.02, s:0.9 + r()*1.3 }; } })));
+    // floor clutter: fallen branches and twigs, small stones in the litter
+    const brGeo = owned(mergeGeometries([forestBranchGeo(1441), forestBranchGeo(1442).rotateY(2.1).translate(0.6, 0, 1.4), forestBranchGeo(1443).rotateY(-1.2).translate(-1.1, 0, -1.6)]));   // one scatter for three sticks
+    [brGeo].forEach((g, i) => sc.push(scatter({ geo:g, mat:logMat, tile:48, radius:75, per:0.0035, seed:1441 + i,
+      place:(x,z,r) => { if (!floor(x,z)) return null; return { y:heightAt(x,z) - 0.03, s:0.7 + r()*0.7, ry:r()*TAU, rz:(r() - 0.5)*0.12, c:new THREE.Color(0.8 + r()*0.3, 0.8 + r()*0.25, 0.8 + r()*0.2) }; } })));
     const mossMat = plantMat({ wind:0, back:0, rock:true, map:tex.ground, roughness:0.95 });
+    sc.push(scatter({ geo:boulderGeo(1435, 2), mat:mossMat, tile:48, radius:55, per:0.012, seed:1435, place:(x,z,r) => { if (!floor(x,z) || perlin(x*0.03 + 7, z*0.03) < -0.1) return null; const s = 0.12 + r()*r()*0.4;
+      return { y:heightAt(x,z) - s*0.35, s, sy:s*(0.5 + r()*0.4), c:new THREE.Color(0.55 + r()*0.25, 0.6 + r()*0.25, 0.5 + r()*0.2) }; } }));
     [boulderGeo(1431, 3)].forEach((g, i) => sc.push(scatter({ geo:g, mat:mossMat, tile:48, radius:120, per:0.003, seed:1431 + i, shadow:true, place:(x,z,r) => {
       const d = Math.abs(x - sx(z)), w = sw(z); if (r() > (d < w*2.4 ? 1 : 0.35)) return null; const s = 0.4 + r()*r()*2.2; return { y:heightAt(x,z) - s*0.3, s, sy:s*(0.55 + r()*0.45), c:new THREE.Color(0.5 + r()*0.2, 0.72 + r()*0.2, 0.42 + r()*0.15) }; } })));
     sc.forEach(o => group.add(o.group));
@@ -7642,6 +7715,23 @@ function vilBuild(S, b){
     vilBox(S[wallSlot], F, ox, oh/2, oz, ow, oh, od, wallC);
     vilQuad(S.tile, F, [ox + ow/2 + 0.3, oh + 0.05, -D/2 - od - 0.4], [ox - ow/2 - 0.3, oh + 0.05, -D/2 - od - 0.4], [ox - ow/2 - 0.3, oh + 1.0, -D/2], [ox + ow/2 + 0.3, oh + 1.0, -D/2], b.roofC, 1, 1); }
   if (b.enter) vilInterior(S, F, b);
+  else if (!b.shed && /house|cottage/.test(b.name)) vilFurnish(S, F, b);
+}
+/* Plain furnishing for the closed homes (seen through doors and windows, or walking in): hearth, table and benches, bed, chest, shelf, cask */
+function vilFurnish(S, F, b){
+  const W = b.W, D = b.D, wt = b.wt, s = b.chim || (b.id % 2 ? 1 : -1), wood = [0.4, 0.28, 0.17], dark = [0.25, 0.17, 0.11], cloth = [[0.62,0.55,0.42],[0.55,0.3,0.22],[0.4,0.45,0.55]][b.id % 3];
+  const ix = W/2 - wt, iz = D/2 - wt;
+  { const T = vilSub(F, -s*0.5, 0, 0.5); vilBox(S.wood, T, 0, 0.76, 0, 1.5, 0.07, 0.8, wood); for (const sx of [-1, 1]) for (const sz of [-1, 1]) vilBox(S.wood, T, sx*0.62, 0.37, sz*0.28, 0.08, 0.74, 0.08, dark);
+    for (const sz of [-1, 1]) vilBox(S.wood, T, 0, 0.44, sz*0.72, 1.3, 0.06, 0.26, wood);
+    vilGeo(S.wood, T, VIL_U.cyl, 0.3, 0.83, 0.05, 0.24, 0.06, 0.24, [0.55, 0.4, 0.25]); vilGeo(S.iron, T, VIL_U.cyl, -0.3, 0.88, -0.1, 0.13, 0.18, 0.13, [0.45, 0.42, 0.38]); }
+  { const T = vilSub(F, -s*(ix - 0.6), 0, -iz + 1.05); vilBox(S.wood, T, 0, 0.2, 0, 1.0, 0.4, 2.0, dark); vilBox(S.cloth, T, 0, 0.47, 0.05, 0.92, 0.16, 1.85, cloth); vilBox(S.cloth, T, 0, 0.6, -0.75, 0.7, 0.14, 0.35, [0.85, 0.82, 0.74]); }
+  vilBox(S.wood, vilSub(F, -s*(ix - 0.6), 0, -iz + 2.45), 0, 0.27, 0, 0.9, 0.54, 0.5, [0.35, 0.22, 0.12]);
+  { const T = vilSub(F, s*0.6, 0, -iz + 0.2); for (const y of [0.9, 1.5]) vilBox(S.wood, T, 0, y, 0, 1.2, 0.05, 0.3, wood);
+    for (let i=0;i<5;i++) vilGeo(S.cloth, T, VIL_U.cyl, -0.45 + i*0.22, 0.99 + (i % 2)*0.6, 0, 0.14, 0.18, 0.14, [[0.55,0.32,0.2],[0.75,0.68,0.5],[0.35,0.4,0.3]][i % 3]); }
+  vilGeo(S.wood, F, VIL_U.cyl, s*(ix - 0.45), 0.45, -iz + 0.5, 0.6, 0.9, 0.6, [0.45, 0.31, 0.18]);
+  if (b.chim){ const hx = s*(ix - 0.45) - s*0.85;   // open hearth before the chimney breast, embers glowing
+    for (const sz of [-1, 1]) vilBox(S.stone, F, hx, 0.6, sz*0.7, 0.7, 1.2, 0.3, b.stoneC); vilBox(S.stone, F, hx, 1.35, 0, 0.75, 0.3, 1.7, b.stoneC);
+    vilBox(S.stone, F, hx + s*0.12, 0.05, 0, 0.85, 0.1, 1.3, b.stoneC.map(v => v*0.7)); vilBox(S.ember, F, hx + s*0.08, 0.15, 0, 0.45, 0.12, 0.8, [0.6, 0.6, 0.6]); }
 }
 /* Furniture, hearth, stairs and the upper floor of an enterable building */
 function vilInterior(S, F, b){
@@ -7863,6 +7953,43 @@ function vilPersonGeo(){
     c.setXYZ(i, col[0], col[1], col[2]); }
   return g;
 }
+/* Weathering on the building materials, in world space: patchy limewash flaking to the daub, rain streaks, rising damp and
+   splash at wall feet (aGy: ground height under the vertex), lichen and moss on stone, moss on old thatch, lichen dots on
+   tiles, silvered timber. kind 0 plaster, 1 stone, 2 thatch, 3 tile, 4 wood */
+function vilWeather(m, kind){
+  const body = [
+    `float wash = 0.86 + 0.22*n3 + 0.08*(n2 - 0.5), flake = smoothstep(0.73, 0.77, tvn(pw*1.5 + 3.0) + 0.04*n2)*vert;
+     diffuseColor.rgb *= wash; diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb*vec3(0.6, 0.52, 0.42), flake*0.85);
+     diffuseColor.rgb *= 1.0 - 0.14*smoothstep(0.55, 0.85, tvn(vec2(fw.x*3.0, fw.y*0.3)))*vert;
+     diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb*vec3(0.48, 0.5, 0.36), foot*0.8);`,
+    `diffuseColor.rgb *= 0.84 + 0.32*n3;
+     float lich = smoothstep(0.64, 0.72, tvn(pw*2.1 + 1.0) + 0.3*(n2 - 0.5))*(1.0 - foot);
+     diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.42, 0.4, 0.2)*(0.75 + 0.4*n2), lich*0.45);
+     float moss = max(foot*0.75*smoothstep(0.35, 0.6, n1 + 0.15), smoothstep(0.7, 0.95, wn.y)*smoothstep(0.58, 0.72, n1 + 0.2*n2)*0.6);
+     diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.08, 0.02)*(0.7 + 0.6*n2), moss);`,
+    `diffuseColor.rgb *= 0.78 + 0.38*n3;
+     float moss = smoothstep(0.52, 0.72, tvn(vVW.xz*0.42 + 2.0) + 0.35*(n2 - 0.5))*smoothstep(0.2, 0.5, wn.y);
+     diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.06, 0.085, 0.025)*(0.7 + 0.6*n2), moss*0.7);
+     diffuseColor.rgb *= 1.0 - 0.18*smoothstep(0.6, 0.9, tvn(vec2(dot(vVW.xz, tg)*2.5, vVW.y*0.8)));`,
+    `diffuseColor.rgb *= 0.8 + 0.34*n3;
+     float lich = step(0.88, th21(floor(vVW.xz*6.0 + vVW.y*3.0)))*smoothstep(0.35, 0.7, n1)*smoothstep(0.2, 0.5, wn.y);
+     diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.55, 0.36, 0.08), lich*0.55);
+     float moss = smoothstep(0.6, 0.75, tvn(vVW.xz*0.7 + 9.0) + 0.3*(n2 - 0.5))*smoothstep(0.2, 0.5, wn.y);
+     diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.075, 0.02)*(0.7 + 0.6*n2), moss*0.55);`,
+    `float L = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11));
+     diffuseColor.rgb = mix(diffuseColor.rgb, vec3(L)*vec3(0.98, 0.98, 1.02)*1.15, 0.45*smoothstep(0.35, 0.75, n3)*vert);
+     diffuseColor.rgb *= (0.85 + 0.3*n2)*(1.0 - 0.45*foot);`][kind];
+  m.onBeforeCompile = sh => {
+    sh.vertexShader = 'attribute float aGy; varying vec3 vVW; varying vec3 vVN; varying float vGh;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+      vVW = (modelMatrix*vec4(transformed, 1.0)).xyz; vVN = normalize(mat3(modelMatrix)*objectNormal); vGh = aGy > 0.0 ? vVW.y - aGy : 50.0;`);
+    sh.fragmentShader = 'varying vec3 vVW; varying vec3 vVN; varying float vGh;\n' + NOISE2D + sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+      { vec3 wn = normalize(vVN); float vert = 1.0 - step(0.6, abs(wn.y)); vec2 tg = normalize(vec2(-wn.z, wn.x) + vec2(1e-5, 0.0)), fw = vec2(dot(vVW.xz, tg), vVW.y);
+        vec2 pw = vert > 0.5 ? fw : vVW.xz;
+        float n1 = tvn(pw*0.9), n2 = tvn(pw*3.7 + 5.0), n3 = tvn(pw*0.23 + 11.0), foot = 1.0 - smoothstep(0.1, 0.9 + 0.6*n1, vGh);
+        ${body} }`);
+  };
+  m.customProgramCacheKey = () => 'vilWeather' + kind;
+}
 function vilPersonMat(){
   const m = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.85 });
   m.onBeforeCompile = sh => {
@@ -8011,12 +8138,24 @@ Helios.registerBiome({
         vilQuad(SL.tile, Fm, [-1.4, 2.6, 0.9], [1.4, 2.6, 0.9], [1.4, 3.3, 0], [-1.4, 3.3, 0], [0.5, 0.27, 0.18]); vilQuad(SL.tile, Fm, [1.4, 2.6, -0.9], [-1.4, 2.6, -0.9], [-1.4, 3.3, 0], [1.4, 3.3, 0], [0.5, 0.27, 0.18]); }
       const stripes = [[0.75,0.2,0.15],[0.2,0.35,0.6],[0.8,0.65,0.25],[0.3,0.5,0.28]];
       L.stalls = []; for (const P of VIL_PENS) P.open = false;
-      for (let i=0;i<6;i++){ const x = -18 + (i % 3)*13 + (i > 2 ? 4 : 0), z = i > 2 ? -240 : -213, ry = i > 2 ? 0 : Math.PI, Fs = vilFrame(x, heightAt(x, z), z, ry), col = stripes[i % 4];
+      const XST = [[8, -226.5, Math.PI/2], [18.5, -226.5, -Math.PI/2], [-18, -226.5, Math.PI/2]];   // a middle row of stalls fills the square
+      for (let i=0;i<9;i++){ const x = i > 5 ? XST[i - 6][0] : -18 + (i % 3)*13 + (i > 2 ? 4 : 0), z = i > 5 ? XST[i - 6][1] : i > 2 ? -240 : -213, ry = i > 5 ? XST[i - 6][2] : i > 2 ? 0 : Math.PI, Fs = vilFrame(x, heightAt(x, z), z, ry), col = stripes[i % 4];
         for (const sx of [-1.3, 1.3]) for (const sz of [-0.6, 0.9]) vilBox(SL.timber, Fs, sx, sz > 0 ? 1.1 : 1.3, sz, 0.1, sz > 0 ? 2.2 : 2.6, 0.1, [0.3, 0.2, 0.12]);
         vilBox(SL.wood, Fs, 0, 0.85, 0.5, 2.8, 0.08, 1.0, [0.45, 0.33, 0.2]);
         for (let s=0;s<6;s++) vilQuad(SL.cloth, Fs, [-1.5 + s*0.5, 2.2, 1.25], [-1.0 + s*0.5, 2.2, 1.25], [-1.0 + s*0.5, 2.6, -0.7], [-1.5 + s*0.5, 2.6, -0.7], s % 2 ? col : [0.88, 0.84, 0.74], 1, 1);
         for (let g=0;g<7;g++) vilGeo(SL.cloth, Fs, U.sph, -1.1 + g*0.36, 0.98, 0.45 + (g % 2)*0.2, 0.32, 0.22, 0.32, [[0.7,0.2,0.12],[0.85,0.6,0.2],[0.4,0.55,0.2],[0.65,0.55,0.4]][(g + i) % 4]);
+        for (let q=0;q<3;q++) vilGeo(SL.cloth, Fs, U.sph, 1.75 + (q % 2)*0.5, 0.32, -0.3 + q*0.42, 0.55, 0.68, 0.5, [0.58, 0.5, 0.36].map(v => v*(0.85 + 0.25*R())));   // grain sacks and a basket of produce by each stall
+        vilGeo(SL.wood, Fs, U.cyl, -1.9, 0.22, 0.6, 0.62, 0.44, 0.62, [0.5, 0.38, 0.22]); for (let g=0;g<5;g++) vilGeo(SL.cloth, Fs, U.sph, -1.9 + (g % 3 - 1)*0.15, 0.46 + (g > 2 ? 0.08 : 0), 0.6 + (g % 2 - 0.5)*0.18, 0.17, 0.15, 0.17, [[0.75,0.18,0.1],[0.85,0.62,0.18],[0.42,0.56,0.2]][(g + i) % 3]);
+        for (let g=0;g<4;g++) vilGeo(SL.cloth, Fs, U.sph, -1.0 + g*0.65, 1.95, -0.62, 0.16, 0.34, 0.16, [[0.62,0.5,0.25],[0.45,0.2,0.1],[0.7,0.6,0.35]][g % 3]);   // strings of onions and cured goods under the awning
         L.stalls.push([x - Math.sin(ry)*0.25, z - Math.cos(ry)*0.25]); }
+      // bunting strung across the square on six poles
+      { const posts = [[-23, -210], [23, -210], [-23, -244], [23, -244], [-23.5, -227], [23.5, -227]], top = p => heightAt(p[0], p[1]) + 5.4, FC = [[0.78,0.18,0.12],[0.92,0.8,0.3],[0.2,0.38,0.66],[0.88,0.86,0.78],[0.3,0.55,0.28]];
+        for (const p of posts) vilBox(SL.timber, vilFrame(p[0], heightAt(p[0], p[1]), p[1], 0), 0, 2.75, 0, 0.16, 5.5, 0.16, [0.28, 0.19, 0.11]);
+        for (const [a2, b2] of [[0, 3], [1, 2], [4, 5]]){ const A = posts[a2], B = posts[b2], ya = top(A) - 0.1, yb = top(B) - 0.1, Ln = Math.hypot(B[0] - A[0], B[1] - A[1]), n = Math.floor(Ln/0.75), ry = Math.atan2(-(B[1] - A[1]), B[0] - A[0]);
+          const P = t => [lerp(A[0], B[0], t), lerp(ya, yb, t) - 1.5*Math.sin(Math.PI*t), lerp(A[1], B[1], t)];
+          for (let q=0;q<n;q++){ const p0 = P(q/n), p1 = P((q + 1)/n), Fq = vilFrame(p0[0], p0[1], p0[2], ry), dl = Math.hypot(p1[0] - p0[0], p1[2] - p0[2]), dy = p1[1] - p0[1];
+            vilBeam(SL.iron, Fq, [0, 0, 0], [dl, dy, 0], 0.025, 0.025, [0.25, 0.22, 0.18]);
+            vilTri(SL.cloth, Fq, [0.1, 0.1*dy/dl - 0.01, 0], [dl - 0.1, 0.9*dy - 0.01, 0], [dl/2, dy/2 - 0.42, 0], FC[(q + a2) % FC.length], 1); } } }
       // watermill wheel housing and leat; kilns; washing lines
       for (const [kx, kz] of VIL_KILNS){ const g = heightAt(kx, kz), Fk = vilFrame(kx, g, kz, 0);
         vilGeo(SL.stone, Fk, U.dome, 0, -0.2, 0, 7, 7.5, 7, [0.6, 0.38, 0.28]); vilGeo(SL.stone, Fk, U.cyl, 0, 3.6, 0, 1.4, 1.2, 1.4, [0.55, 0.34, 0.25]);
@@ -8052,7 +8191,10 @@ Helios.registerBiome({
       sh.vertexShader = 'attribute float aB; uniform float uLit[64]; varying float vLit;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vLit = uLit[int(aB + 0.5)];');
       sh.fragmentShader = 'varying float vLit;\n' + sh.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n totalEmissiveRadiance += vec3(1.0, 0.55, 0.2)*vLit*2.4;'); };
     matOf.glass.customProgramCacheKey = () => 'vilGlass';
-    for (const k of VIL_SLOTS){ const g = vilFinish(SL[k], k === 'glass'); if (!g) continue; const m = new THREE.Mesh(g, matOf[k]); m.castShadow = k !== 'glass' && k !== 'ember'; m.receiveShadow = true; group.add(m); }
+    [['plaster', 0], ['stone', 1], ['thatch', 2], ['tile', 3], ['wood', 4], ['timber', 4]].forEach(([key, kind]) => vilWeather(matOf[key], kind));
+    for (const k of VIL_SLOTS){ const g = vilFinish(SL[k], k === 'glass'); if (!g) continue;
+      if (k !== 'glass' && k !== 'ember'){ const p = g.attributes.position, gy = new Float32Array(p.count); for (let i=0;i<p.count;i++) gy[i] = heightAt(p.getX(i), p.getZ(i)); g.setAttribute('aGy', new THREE.BufferAttribute(gy, 1)); }   // ground under each vertex, for damp and splash at wall feet
+      const m = new THREE.Mesh(g, matOf[k]); m.castShadow = k !== 'glass' && k !== 'ember'; m.receiveShadow = true; group.add(m); }
 
     // ---- watermill wheel and windmill sails (turning parts)
     const mkPart = fill => { const S2 = vilSlots(); fill(S2); const g2 = new THREE.Group(); for (const k of VIL_SLOTS){ const g = vilFinish(S2[k]); if (g){ const m = new THREE.Mesh(g, matOf[k]); m.castShadow = true; m.receiveShadow = true; g2.add(m); } } return g2; };
@@ -9214,7 +9356,7 @@ function urbFacadeMat(){
       .replace('#include <color_fragment>', `#include <color_fragment>
         vec3 uN = normalize(vUWN);
         float uPw = dot(uUrbPow, vec4(equal(vec4(floor(vUMeta.x + 0.5)), vec4(0.0, 1.0, 2.0, 3.0))));
-        float uWm = 0.0, uLit = 0.0, uHue = 0.0, uVert = 1.0 - step(0.6, abs(uN.y));
+        float uWm = 0.0, uLit = 0.0, uHue = 0.0, uUp = 0.0, uGf = 0.0, uVar = 0.0, uVert = 1.0 - step(0.6, abs(uN.y));
         diffuseColor.rgb *= mix(0.95, 0.8 + 0.34*tvn(vec2(dot(vUWP.xz, vec2(0.71, 0.7))*0.9, vUWP.y*0.06)), uVert) * (0.9 + 0.2*tvn(vUWP.xz*1.3 + vUWP.y*1.1));
         vec2 tg = normalize(vec2(-uN.z, uN.x) + vec2(1e-5, 0.0));
         float u = dot(vUWP.xz, tg)/max(vUWin.y, 0.1), lv = (vUWP.y - vUWin.w)/max(vUWin.x, 0.1);
@@ -9226,24 +9368,38 @@ function urbFacadeMat(){
           float mm = step(bx.x, f.x)*step(f.x, bx.z)*step(bx.y, f.y)*step(f.y, bx.w)*step(0.0, lv);
           if (st > 3.5) mm *= step(0.04, fract(u*0.5));   // ribbon windows: thin mullions
           vec2 tq = floor(tg*2.0 + 0.5); float hh = th21(cid*vec2(1.0, 1.7) + vec2(floor(vUMeta.y*37.1) + tq.x*11.0, tq.y*23.0));   // hashed inputs must be exact per window
-          float aa = clamp(uAA*1.4 - 0.2, 0.0, 1.0), area = (bx.z - bx.x)*(bx.w - bx.y);
-          uWm = mix(mm, area*0.85, aa);
+          // detail fades out before a window cell shrinks to a couple of pixels, so distant towers settle to an even tone instead of shimmering
+          float aa = smoothstep(0.1, 0.5, uAA), fine = (1.0 - smoothstep(0.05, 0.2, uAA))*step(0.0, lv), area = (bx.z - bx.x)*(bx.w - bx.y);
+          // punched windows sit in reveals: a shadowed head and jambs inside the opening, a stone sill and lintel outside it
+          float pun = (step(st, 1.5)*(1.0 - gf) + step(2.5, st)*step(st, 3.5))*fine;
+          float mmIn = step(bx.x + 0.035, f.x)*step(f.x, bx.z - 0.035)*step(bx.y + 0.012, f.y)*step(f.y, bx.w - 0.075)*step(0.0, lv);
+          float rim = max(mm - mmIn, 0.0)*pun, inX = step(bx.x - 0.05, f.x)*step(f.x, bx.z + 0.05);
+          float sill = inX*step(bx.y - 0.06, f.y)*step(f.y, bx.y)*pun, lint = inX*step(bx.w, f.y)*step(f.y, bx.w + 0.06)*pun;
+          float drip = step(bx.x + 0.04, f.x)*step(f.x, bx.z - 0.04)*smoothstep(bx.y - 0.62, bx.y - 0.06, f.y)*step(f.y, bx.y - 0.06)*pun*(0.4 + 0.6*tvn(vec2(u*13.0 + hh*7.0, lv*1.7)));
+          // floor-line ledges on offices and ribbon blocks, with the shadow they cast on the course below
+          float lg = (step(st, 1.5)*step(1.5, lv) + step(3.5, st))*fine, ledge = step(f.y, 0.04)*lg, ush = step(0.94, f.y)*lg;
+          uWm = mix(mix(mm, mm - rim, pun), area*0.85, aa);
           uLit = mix(mm*step(hh, uUrbLit + 0.25*gf), area*uUrbLit, aa)*uPw;
-          uHue = fract(hh*13.7);
+          uHue = fract(hh*13.7); uGf = gf; uVar = 1.0 - aa;
           float ed = min(min(f.x - bx.x, bx.z - f.x), min(f.y - bx.y, bx.w - f.y));
-          diffuseColor.rgb *= 1.0 - 0.45*(1.0 - mm)*smoothstep(-0.08, 0.0, -abs(ed))*(1.0 - aa)*step(st, 3.5);
+          diffuseColor.rgb *= 1.0 - 0.45*(1.0 - mm)*smoothstep(-0.08, 0.0, -abs(ed))*(1.0 - aa)*step(st, 3.5)*(1.0 - pun);
           if (st > 1.5 && st < 2.5) diffuseColor.rgb *= 1.0 - 0.3*(1.0 - mm)*(1.0 - aa);
+          diffuseColor.rgb *= (1.0 + 0.32*(sill + lint) + 0.16*ledge)*(1.0 - 0.38*ush - 0.22*drip)*(1.0 - 0.55*rim*step(bx.y + 0.012, f.y));
+          uUp = sill + ledge - 0.9*rim*step(bx.w - 0.075, f.y) - 0.5*lint;   // normal tilt: sills and ledges catch the sky, reveal heads face down
+          diffuseColor.rgb *= mix(0.74, 1.0, smoothstep(0.0, 2.6, vUWP.y - vUWin.w + 0.8*tvn(vUWP.xz*0.7)));   // splash grime along the foot
           vec3 gl = st > 1.5 && st < 2.5 ? mix(vec3(0.05, 0.08, 0.1), vec3(0.1, 0.13, 0.13), hh) : mix(vec3(0.03, 0.035, 0.04), vec3(0.11, 0.1, 0.085), hh*hh);
           diffuseColor.rgb = mix(diffuseColor.rgb, gl + uLit*vec3(0.22, 0.16, 0.09)*(0.2 + 0.8*uUrbNight), uWm);
         }`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        normal = normalize(normal + (viewMatrix*vec4(0.0, 1.0, 0.0, 0.0)).xyz*uUp*0.9);`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         roughnessFactor = mix(roughnessFactor, 0.1, uWm);`)
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
         metalnessFactor = mix(metalnessFactor, 0.5, uWm);`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        totalEmissiveRadiance += mix(vec3(1.0, 0.64, 0.34), vec3(0.72, 0.85, 1.0), step(0.64, uHue))*uLit*uUrbNight*1.15;`);
+        totalEmissiveRadiance += mix(vec3(0.95, 0.72, 0.45), mix(mix(vec3(1.0, 0.56, 0.24), vec3(1.0, 0.78, 0.5), step(0.35, uHue)), vec3(0.62, 0.8, 1.0), step(0.72, uHue)*(1.0 - uGf))*(0.35 + 0.65*fract(uHue*7.31))*1.45, uVar)*uLit*uUrbNight*0.7*(0.85 + 0.8*uGf);`);   // rooms vary in warmth and brightness; shopfronts glow brighter at street level
   };
-  m.customProgramCacheKey = () => 'urbFacade1';
+  m.customProgramCacheKey = () => 'urbFacade2';
   return m;
 }
 /* Geometry buffers carrying the facade attributes: aWin (floor height, bay width, window style, base y), aMeta (district, seed) */
@@ -9408,6 +9564,16 @@ Helios.registerBiome({
       for (const t of [1.6, 2.1]) urbBeam(b, P(t, 1.0, o.fh - 0.1), P(t, 1.0, 1.4), 0.06, 0.06, IRON);   // drop ladder
       escapes.push({ x:cx + F.nx*1.6, z:cz + F.nz*1.6, cx, cz, nx:F.nx, nz:F.nz, tx:F.tx, tz:F.tz, floors:o.floors, fh:o.fh, top:o.floors*o.fh + 0.8, rec:o });
     }
+    // balconies stacked over a window column or two: slab and railing panels, placed on the facade shader's window grid
+    function balconies(o){
+      const F = frontOf(o), b = B(F.cx, F.cz), [nx, nz] = o.front, tgx = -nz, tgz = nx, uc = (F.cx*tgx + F.cz*tgz)/o.bay, i0 = Math.round(uc - 0.5), sc = tint(o.col, 1.2), rail = o.kind === 'office' ? STEEL : IRON;
+      const cols = [i0]; if (F.hw > 7) cols.push(i0 + (hash2(o.x0, o.z1) < 0.5 ? 2 : -2));
+      for (const i of cols){ const along = (i + 0.5)*o.bay - uc*o.bay; if (Math.abs(along) > F.hw - 1.4) continue;
+        const P = (t, n, y) => [F.cx + tgx*(along + t) + nx*n, y, F.cz + tgz*(along + t) + nz*n];
+        const box = (t0, t1, n0, n1, y0, y1, c) => { const a = P(t0, n0, y0), e = P(t1, n1, y1); urbBox(b, Math.min(a[0], e[0]), y0, Math.min(a[2], e[2]), Math.max(a[0], e[0]), y1, Math.max(a[2], e[2]), c, URB_NOWIN, URB_M0, { bottom:true }); };
+        for (let f=2; f<o.floors; f++){ const y = f*o.fh + 0.02;
+          box(-0.98, 0.98, 0, 0.95, y - 0.16, y, sc); box(-0.98, 0.98, 0.9, 0.95, y, y + 1.0, rail); box(-0.98, -0.93, 0, 0.9, y, y + 1.0, rail); box(0.93, 0.98, 0, 0.9, y, y + 1.0, rail); } }
+    }
     function roofProps(rec, o){
       const [x0, z0, x1, z1, h] = (o.tiers || [[o.x0, o.z0, o.x1, o.z1, rec.h]])[(o.tiers?.length || 1) - 1];
       if (o.kind === 'tenement' && R() < 0.45 && x1 - x0 > 7 && z1 - z0 > 7) tanks.push({ x:lerp(x0 + 3.5, x1 - 3.5, R()), z:lerp(z0 + 3.5, z1 - 3.5, R()), y:h, alive:true, rec });
@@ -9457,6 +9623,7 @@ Helios.registerBiome({
                            : { x0, z0, x1, z1, floors:4 + (R()*4|0), fh:3.2, bay:3.0, style:1, col:BRICKS[R()*BRICKS.length|0], front:sd.f, kind:'tenement' };
           const rec = building(o); roofProps(rec, o); streetDressing(o);
           if (o.kind === 'tenement' && o.floors >= 4 && w >= 9 && R() < 0.55) fireEscape(o);
+          else if (o.floors >= 3 && w >= 8 && hash2(x0*0.37, z0*0.53) < (o.kind === 'tenement' ? 0.35 : 0.2)) balconies(o);   // hashed, so the city's layout draws are unchanged
           if (boards.length < 7 && o.kind === 'tenement' && w > 14 && R() < 0.12) boards.push({ rec, o });
         }
       }
@@ -9752,6 +9919,25 @@ Helios.registerBiome({
       const px = l.x + Math.cos(l.ry)*2.2, pz = l.z - Math.sin(l.ry)*2.2; dm.position.set(px, groundAt(px, pz) + 0.05, pz); dm.updateMatrix(); poolMesh[l.d].setMatrixAt(l.hi, dm.matrix); });
     poleMesh.computeBoundingSphere(); group.add(poleMesh);
     headMesh.forEach((m, d) => { m.count = hc[d]; m.computeBoundingSphere(); group.add(m); }); poolMesh.forEach((m, d) => { m.count = hc[d]; m.computeBoundingSphere(); m.renderOrder = 2; group.add(m); });
+    // light cones under the heads: faint additive volumes (brightest at the lamp and seen edge-on), so lit streets read through rain, fog and bloom
+    const coneGeo = new THREE.CylinderGeometry(0.28, 3.3, 7.6, 12, 1, true).translate(2.2, 7.72 - 3.8, 0); OWNED.push(coneGeo);
+    const coneMat = new THREE.ShaderMaterial({ transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, side:THREE.DoubleSide, fog:false, uniforms:{ uCol:{ value:new THREE.Color(1.0, 0.72, 0.42) }, uInt:{ value:0 } },
+      vertexShader:`#include <common>
+        #include <logdepthbuf_pars_vertex>
+        varying float vH; varying vec3 vN, vV;
+        void main(){ vec4 wp = modelMatrix*instanceMatrix*vec4(position, 1.0); vH = uv.y; vN = normalize(mat3(modelMatrix*instanceMatrix)*normal); vV = cameraPosition - wp.xyz;
+          gl_Position = projectionMatrix*viewMatrix*wp;
+          #include <logdepthbuf_vertex>
+        }`,
+      fragmentShader:`#include <common>
+        #include <logdepthbuf_pars_fragment>
+        uniform vec3 uCol; uniform float uInt; varying float vH; varying vec3 vN, vV;
+        void main(){
+          #include <logdepthbuf_fragment>
+          float e = abs(dot(normalize(vN), normalize(vV))), d = length(vV);
+          gl_FragColor = vec4(uCol*uInt*e*e*vH*vH*smoothstep(1.5, 6.0, d)*(1.0 - smoothstep(120.0, 260.0, d)), 1.0); }` });
+    const coneMesh = [0, 1, 2, 3].map(d => { const m = new THREE.InstancedMesh(coneGeo, coneMat.clone(), Math.max(1, hc[d])); m.count = hc[d]; m.renderOrder = 3; m.visible = false; return m; });
+    lamps.forEach(l => coneMesh[l.d].setMatrixAt(l.hi, l.mat)); coneMesh.forEach(m => { m.computeBoundingSphere(); group.add(m); });
     // traffic signals at the city intersections: two heads per axis, lamps coloured by the phase
     const signals = [], inters = [];
     for (const xc of xsC) for (const zc of zsC) inters.push({ x:xc, z:zc, d:district(xc, zc), off:hash2(xc*0.1, zc*0.1)*30 });
@@ -9894,7 +10080,7 @@ Helios.registerBiome({
     function knockLamp(l, p){ if (!l.up) return; l.up = false; let dx = l.x - p.x, dz = l.z - p.z; const dl = Math.hypot(dx, dz) || 1; dx /= dl; dz /= dl;
       _q.setFromAxisAngle(_p.set(dz, 0, -dx), 1.38); const base = new THREE.Quaternion().setFromEuler(_e.set(0, l.ry, 0)); _q.multiply(base);
       _mm.compose(_s.set(l.x, TH[2], l.z), _q, _p.set(1, 1, 1)); poleMesh.setMatrixAt(l.pi, _mm); headMesh[l.d].setMatrixAt(l.hi, _mm); poleMesh.instanceMatrix.needsUpdate = headMesh[l.d].instanceMatrix.needsUpdate = true;
-      dm.position.set(0, -1e4, 0); dm.updateMatrix(); poolMesh[l.d].setMatrixAt(l.hi, dm.matrix); poolMesh[l.d].instanceMatrix.needsUpdate = true;
+      dm.position.set(0, -1e4, 0); dm.updateMatrix(); poolMesh[l.d].setMatrixAt(l.hi, dm.matrix); poolMesh[l.d].instanceMatrix.needsUpdate = true; coneMesh[l.d].setMatrixAt(l.hi, dm.matrix); coneMesh[l.d].instanceMatrix.needsUpdate = true;
       const tip = _p.set(2.2, 7.8, 0).applyMatrix4(_mm); sources.push({ x:tip.x, y:Math.max(0.1, tip.y), z:tip.z, d:l.d, live:true, name:'fallen streetlight' }); addPuddle(tip.x, tip.z, 1.4, 0); spark(tip.x, tip.y + 0.2, tip.z, 30, 6); }
 
     /* ---- Power grid ---- */
@@ -9990,7 +10176,7 @@ Helios.registerBiome({
       URB_U.uUrbPow.value.set(PW.p[0], PW.p[1], PW.p[2], PW.p[3]);
       // ---- lights: streetlights, pools, neon, signals, cars, trains, tunnel lights, billboards
       const lampK = smoothstep(0.25, 0.7, nightK);
-      headMesh.forEach((m, d) => m.material.emissiveIntensity = 6*lampK*PW.p[d]); poolMesh.forEach((m, d) => m.material.opacity = 0.85*lampK*PW.p[d]);
+      headMesh.forEach((m, d) => m.material.emissiveIntensity = 6*lampK*PW.p[d]); poolMesh.forEach((m, d) => m.material.opacity = 0.85*lampK*PW.p[d]); coneMesh.forEach((m, d) => { m.material.uniforms.uInt.value = (0.32 + 0.6*env.rain + 0.2*smoothstep(1.2, 4, env.fog))*lampK*PW.p[d]; m.visible = m.material.uniforms.uInt.value > 0.004; });
       neonMeshes.forEach((m, d) => m.material.color.setScalar((0.6 + 2.6*nightK)*(0.15 + 0.85*PW.p[d])*(0.92 + 0.08*Math.sin(t*31 + d))));
       carLights.material.color.setScalar(0.4 + 2.5*nightK); trainWin.material.emissiveIntensity = (0.3 + 2.2*nightK)*PW.p[3];
       tubeMesh.material.color.setRGB(...(PW.p[3] > 0.5 ? [2.2, 2.3, 2.4].map(v => v*PW.p[3]) : [0.9, 0.06, 0.04]));
